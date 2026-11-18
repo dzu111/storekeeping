@@ -1,11 +1,10 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { redirect } from 'next/navigation';
 import { createClient } from '../../../../lib/supabase/server';
 
 type Line = { id: number; approved_qty: number };
-export type ProcessResult = { error: string } | undefined;
+export type ProcessResult = { error: string } | { ok: true };
 
 export async function processRequest(
   requestId: number,
@@ -23,7 +22,6 @@ export async function processRequest(
     const valid = lines.every((l) => Number.isInteger(l.id) && Number.isInteger(l.approved_qty) && l.approved_qty >= 0);
     if (!valid) return { error: 'Kuantiti tidak sah.' };
 
-    // One database transaction: saves quantities, deducts stock, writes ledger, sets status
     const { error } = await supabase.rpc('approve_request_lines', {
       p_request_id: requestId,
       p_lines: lines.map((l) => ({ id: l.id, qty: l.approved_qty })),
@@ -40,7 +38,6 @@ export async function processRequest(
   }
 
   revalidatePath('/dashboard');
-  revalidatePath('/dashboard/requests');
   revalidatePath(`/dashboard/requests/${requestId}`);
-  redirect('/dashboard'); // keep outside try/catch
+  return { ok: true }; // the caller decides where to go next
 }

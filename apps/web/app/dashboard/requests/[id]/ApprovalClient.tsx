@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { processRequest } from './action';
 
 const glass =
@@ -19,11 +20,14 @@ export default function ApprovalClient({
   requestId,
   status,
   initialItems,
+  onDone,
 }: {
   requestId: number;
   status: string;
   initialItems: any[];
+  onDone?: () => void;
 }) {
+  const router = useRouter();
   const readOnly = status !== 'Pending';
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -33,18 +37,19 @@ export default function ApprovalClient({
   const [rows, setRows] = useState(() =>
     (initialItems as Row[]).map((r) => {
       const info = Array.isArray(r.items) ? r.items[0] : r.items;
-      const max = Math.min(r.qty_requested, info?.current_stock ?? 0);
+      const stock = info?.current_stock ?? 0;
+      const max = Math.min(r.qty_requested, stock);
       return {
         id: r.id,
         item_id: r.item_id,
         requested: r.qty_requested,
-        stock: info?.current_stock ?? 0,
+        stock,
         name: info?.name ?? 'Item tidak dijumpai',
         code: info?.item_code ?? '',
         unit: info?.unit ?? '',
         max,
-        // while pending: start at the most that can be approved; otherwise show what was approved
-        approved: readOnly ? r.qty_approved : max,
+        // Pending: start at the most that can be approved. Otherwise show what was approved.
+        approved: readOnly ? r.qty_approved ?? 0 : max,
       };
     })
   );
@@ -57,6 +62,12 @@ export default function ApprovalClient({
   const isPartial = rows.some((r) => r.approved < r.requested);
   const allZero = totalApproved === 0;
 
+  // Called after a successful approve or reject
+  const finish = () => {
+    if (onDone) onDone();            // used by the single-page dashboard
+    else router.push('/dashboard');  // used by the standalone review page
+  };
+
   const handleApprove = async () => {
     setError('');
     setLoading(true);
@@ -65,22 +76,28 @@ export default function ApprovalClient({
       'Approved',
       rows.map((r) => ({ id: r.id, approved_qty: r.approved }))
     );
-    if (res?.error) {
+    if ('error' in res) {
       setError(res.error);
       setLoading(false);
+      return;
     }
-    // on success the server action redirects to /dashboard
+    finish();
   };
 
   const handleReject = async () => {
-    if (!rejectReason.trim()) return setError('Sila nyatakan sebab penolakan.');
+    if (!rejectReason.trim()) {
+      setError('Sila nyatakan sebab penolakan.');
+      return;
+    }
     setError('');
     setLoading(true);
     const res = await processRequest(requestId, 'Rejected', [], rejectReason);
-    if (res?.error) {
+    if ('error' in res) {
       setError(res.error);
       setLoading(false);
+      return;
     }
+    finish();
   };
 
   return (
