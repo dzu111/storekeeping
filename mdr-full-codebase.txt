@@ -1,0 +1,3387 @@
+﻿
+==================== FILE: package.json ====================
+
+{
+  "name": "mdr-system",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ]
+}
+
+==================== FILE: apps\mobile\app.json ====================
+
+{
+  "expo": {
+    "name": "MDR Stor",
+    "slug": "mdr-stor",
+    "scheme": "mdrstor",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-status-bar",
+      "expo-sharing"
+    ]
+  }
+}
+
+==================== FILE: apps\mobile\App.tsx ====================
+
+import React, { useState, useEffect } from 'react';
+import { View, ActivityIndicator } from 'react-native';
+import { Session } from '@supabase/supabase-js';
+import * as Linking from 'expo-linking';
+import { supabase } from './lib/supabase';
+
+import LoginScreen from './screens/LoginScreen';
+import SignUpScreen from './screens/SignUpScreen';
+import UpdatePasswordScreen from './screens/UpdatePasswordScreen';
+import MainLayout from './screens/MainLayout';
+
+export default function App() {
+  const [session, setSession] = useState<Session | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [authScreen, setAuthScreen] = useState<'Login' | 'SignUp' | 'UpdatePassword'>('Login');
+
+  useEffect(() => {
+    // 1. Exchange deep-link codes or apply tokens from implicit-flow links.
+    const handleUrl = async (event: { url: string }) => {
+      if (event.url) {
+        const url = new URL(event.url);
+        const code = url.searchParams.get('code');
+
+        if (code) {
+          await supabase.auth.exchangeCodeForSession(code);
+          return;
+        }
+
+        const params = new URLSearchParams(url.hash.slice(1));
+        const access_token = params.get('access_token');
+        const refresh_token = params.get('refresh_token');
+        if (access_token && refresh_token) {
+          await supabase.auth.setSession({ access_token, refresh_token });
+        }
+      }
+    };
+
+    // Catch the URL if the app was completely closed
+    Linking.getInitialURL().then((url) => {
+      if (url) handleUrl({ url });
+    });
+    
+    // Catch the URL if the app was already open in the background
+    const urlSubscription = Linking.addEventListener('url', handleUrl);
+
+    // 2. Standard session setup
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setLoading(false);
+    });
+
+    // 3. Listen for the 'PASSWORD_RECOVERY' event triggered by the URL
+    const { data: authSubscription } = supabase.auth.onAuthStateChange((event, session) => {
+      setSession(session);
+      if (event === 'PASSWORD_RECOVERY') {
+        setAuthScreen('UpdatePassword');
+      } else {
+        setAuthScreen('Login');
+      }
+    });
+
+    return () => {
+      urlSubscription.remove();
+      authSubscription.subscription.unsubscribe();
+    };
+  }, []);
+
+  if (loading) return <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f4effc' }}><ActivityIndicator size="large" color="#5138a1" /></View>;
+
+  if (!session || authScreen === 'UpdatePassword') {
+    if (authScreen === 'UpdatePassword') return <UpdatePasswordScreen onComplete={() => setAuthScreen('Login')} />;
+    if (authScreen === 'SignUp') return <SignUpScreen onBack={() => setAuthScreen('Login')} />;
+    return <LoginScreen onNavigateToSignUp={() => setAuthScreen('SignUp')} />;
+  }
+
+  return <MainLayout />;
+}
+
+==================== FILE: apps\mobile\index.ts ====================
+
+import { registerRootComponent } from 'expo';
+
+import App from './App';
+
+// registerRootComponent calls AppRegistry.registerComponent('main', () => App);
+// It also ensures that whether you load the app in Expo Go or in a native build,
+// the environment is set up appropriately
+registerRootComponent(App);
+
+==================== FILE: apps\mobile\package.json ====================
+
+{
+  "name": "mobile",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "dependencies": {
+    "@expo/metro-runtime": "~58.0.17",
+    "@expo/vector-icons": "^15.0.2",
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "@supabase/supabase-js": "^2.119.0",
+    "expo": "~58.0.24",
+    "expo-linking": "~58.0.17",
+    "expo-print": "~58.0.9",
+    "expo-sharing": "~58.0.23",
+    "expo-status-bar": "~58.0.5",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-native": "0.88.1",
+    "react-native-url-polyfill": "^4.0.0",
+    "react-native-web": "^0.21.4"
+  },
+  "devDependencies": {
+    "@types/react": "~19.3.0",
+    "typescript": "~6.0.3"
+  },
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web"
+  },
+  "private": true
+}
+
+==================== FILE: apps\mobile\tsconfig.json ====================
+
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true
+  }
+}
+
+==================== FILE: apps\mobile\.claude\settings.json ====================
+
+{
+  "enabledPlugins": {
+    "expo@claude-plugins-official": true
+  }
+}
+
+==================== FILE: apps\mobile\lib\supabase.ts ====================
+
+import 'react-native-url-polyfill/auto';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { createClient } from '@supabase/supabase-js';
+
+const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+
+if (!supabaseUrl || !supabaseAnonKey) {
+  throw new Error('Missing Supabase URL or Anon Key in environment variables.');
+}
+
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    storage: AsyncStorage,
+    autoRefreshToken: true,
+    persistSession: true,
+    detectSessionInUrl: false,
+  },
+});
+
+==================== FILE: apps\mobile\screens\CatalogScreen.tsx ====================
+
+import React, { useEffect, useState } from 'react';
+import { View, Text, FlatList, TouchableOpacity, TextInput, StyleSheet, ActivityIndicator, ScrollView, LayoutAnimation, Platform, UIManager } from 'react-native';
+import { Feather } from '@expo/vector-icons';
+import { supabase } from '../lib/supabase';
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
+
+const smoothLayoutAnim = {
+  duration: 250,
+  create: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
+  update: { type: LayoutAnimation.Types.easeInEaseOut },
+  delete: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
+};
+
+export default function CatalogScreen({ activeCategory, openQuantityModal }: any) {
+  const [items, setItems] = useState<any[]>([]);
+  const [filteredItems, setFilteredItems] = useState<any[]>([]);
+  const [allSubcategories, setAllSubcategories] = useState<any[]>([]);
+  const [displaySubcategories, setDisplaySubcategories] = useState<any[]>([]);
+  
+  const [activeSubcategory, setActiveSubcategory] = useState<number | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    fetchCatalogData();
+  }, []);
+
+  useEffect(() => {
+    let result = items;
+    if (activeCategory !== null) result = result.filter(item => item.category_id === activeCategory.id);
+    if (activeSubcategory !== null) result = result.filter(item => item.subcategory_id === activeSubcategory);
+    if (searchQuery.trim() !== '') {
+      result = result.filter(item => {
+        const query = searchQuery.toLowerCase();
+        return (item.name.toLowerCase().includes(query) || (item.item_code && item.item_code.toLowerCase().includes(query)) || (item.search_keywords && item.search_keywords.toLowerCase().includes(query)));
+      });
+    }
+    LayoutAnimation.configureNext(smoothLayoutAnim);
+    setFilteredItems(result);
+  }, [searchQuery, activeCategory, activeSubcategory, items]);
+
+  useEffect(() => {
+    LayoutAnimation.configureNext(smoothLayoutAnim);
+    if (activeCategory === null) {
+      setDisplaySubcategories([]);
+    } else {
+      setDisplaySubcategories(allSubcategories.filter(sub => sub.category_id === activeCategory.id));
+    }
+    setActiveSubcategory(null);
+  }, [activeCategory, allSubcategories]);
+
+  const fetchCatalogData = async () => {
+    setIsLoading(true);
+    const { data: subData } = await supabase.from('subcategories').select('id, category_id, name').order('sort_order', { ascending: true });
+    if (subData) setAllSubcategories(subData);
+
+    const { data: itemData } = await supabase.from('items').select('id, item_code, name, current_stock, category_id, subcategory_id, unit, search_keywords').eq('is_active', true).order('name');
+    if (itemData) { setItems(itemData); setFilteredItems(itemData); }
+    setIsLoading(false);
+  };
+
+  const renderItem = ({ item }: { item: any }) => (
+    <View style={styles.card}>
+      <View style={styles.cardInfo}>
+        <Text style={styles.itemCode}>{item.item_code}</Text>
+        <Text style={styles.itemName}>{item.name}</Text>
+        <Text style={styles.itemStock}>Baki: {item.current_stock} {item.unit}</Text>
+      </View>
+      <TouchableOpacity activeOpacity={0.7} style={styles.button} onPress={() => openQuantityModal(item)}>
+        <Text style={styles.buttonText}>Pilih</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
+  return (
+    <View style={styles.container}>
+      <View style={styles.searchContainer}>
+        <View style={styles.searchWrapper}>
+          <Feather name="search" size={20} color="#9ca3af" style={styles.searchIcon} />
+          <TextInput style={styles.searchInput} placeholder="Cari item atau kod..." placeholderTextColor="#9ca3af" value={searchQuery} onChangeText={setSearchQuery} />
+        </View>
+      </View>
+
+      {displaySubcategories.length > 0 ? (
+        <View style={styles.subcategoryContainer}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryScroll}>
+            <TouchableOpacity activeOpacity={0.7} style={[styles.categoryPill, activeSubcategory === null && styles.activePill]} onPress={() => { LayoutAnimation.configureNext(smoothLayoutAnim); setActiveSubcategory(null); }}>
+              <Text style={[styles.categoryText, activeSubcategory === null && styles.activeText]}>Semua</Text>
+            </TouchableOpacity>
+            {displaySubcategories.map((sub) => (
+              <TouchableOpacity key={sub.id} activeOpacity={0.7} style={[styles.categoryPill, activeSubcategory === sub.id && styles.activePill]} onPress={() => { LayoutAnimation.configureNext(smoothLayoutAnim); setActiveSubcategory(sub.id); }}>
+                <Text style={[styles.categoryText, activeSubcategory === sub.id && styles.activeText]}>{sub.name}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      ) : null}
+      
+      {isLoading ? (
+        <ActivityIndicator size="large" color="#5138a1" style={{ marginTop: 50 }} />
+      ) : (
+        <FlatList data={filteredItems} keyExtractor={(item) => item.id.toString()} renderItem={renderItem} contentContainerStyle={styles.list} ListEmptyComponent={<Text style={styles.emptyText}>Tiada item dijumpai.</Text>} />
+      )}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#f4effc' },
+  searchContainer: { paddingHorizontal: 20, paddingVertical: 10, backgroundColor: '#f4effc' },
+  searchWrapper: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#ffffff', borderRadius: 20, paddingHorizontal: 16, height: 50, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 2 },
+  searchIcon: { marginRight: 10 },
+  searchInput: { flex: 1, fontSize: 16, color: '#1f2937' }, 
+  subcategoryContainer: { paddingBottom: 10, backgroundColor: '#f4effc' },
+  categoryScroll: { paddingHorizontal: 20, gap: 8 },
+  categoryPill: { paddingHorizontal: 16, paddingVertical: 8, backgroundColor: '#ffffff', borderRadius: 20, borderWidth: 1, borderColor: '#e5e7eb' },
+  activePill: { backgroundColor: '#5138a1', borderColor: '#5138a1' },
+  categoryText: { color: '#6b7280', fontWeight: '600' },
+  activeText: { color: '#ffffff', fontWeight: 'bold' },
+  list: { padding: 20, paddingBottom: 100 },
+  card: { flexDirection: 'row', backgroundColor: '#ffffff', padding: 16, borderRadius: 16, marginBottom: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.05, shadowRadius: 6, elevation: 3 },
+  cardInfo: { flex: 1, paddingRight: 10, justifyContent: 'center' },
+  itemCode: { fontSize: 12, color: '#9ca3af', fontWeight: '600' },
+  itemName: { fontSize: 16, fontWeight: '700', color: '#1f2937', marginTop: 4 },
+  itemStock: { fontSize: 14, color: '#5138a1', fontWeight: '700', marginTop: 6 },
+  button: { backgroundColor: '#5138a1', justifyContent: 'center', paddingHorizontal: 16, borderRadius: 12 },
+  buttonText: { color: '#ffffff', fontWeight: '700' },
+  emptyText: { textAlign: 'center', marginTop: 40, color: '#9ca3af', fontSize: 16 },
+});
+
+==================== FILE: apps\mobile\screens\HomeScreen.tsx ====================
+
+import React, { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, Alert, ScrollView, Modal, LayoutAnimation } from 'react-native';
+import { Feather } from '@expo/vector-icons';
+import { supabase } from '../lib/supabase';
+import { DEPARTMENTS } from './SignUpScreen';
+
+const AVATARS = [
+  { id: 'default', color: '#f3f4f6', icon: 'user', iconColor: '#9ca3af' },
+  { id: 'av1', color: '#fee2e2', icon: 'smile', iconColor: '#ef4444' },
+  { id: 'av2', color: '#dcfce3', icon: 'coffee', iconColor: '#22c55e' },
+  { id: 'av3', color: '#e0e7ff', icon: 'star', iconColor: '#6366f1' },
+  { id: 'av4', color: '#fef3c7', icon: 'sun', iconColor: '#f59e0b' },
+  { id: 'av5', color: '#fce7f3', icon: 'heart', iconColor: '#ec4899' },
+];
+
+export default function HomeScreen({ userProfile, openQuantityModal, navigateTo }: any) {
+  const [requests, setRequests] = useState<any[]>([]);
+  const [hotItems, setHotItems] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showAvatarModal, setShowAvatarModal] = useState(false);
+  const [currentAvatar, setCurrentAvatar] = useState('default');
+  
+  // State for expanded card
+  const [expandedRequestId, setExpandedRequestId] = useState<number | null>(null);
+
+  useEffect(() => {
+    fetchDashboardData();
+  }, [userProfile]);
+
+    const fetchDashboardData = async () => {
+    // 2. Add safety check here too
+    if (!userProfile || !userProfile.id) {
+      setLoading(false);
+      return; 
+    }
+    
+    setLoading(true);
+    if (userProfile.avatar) setCurrentAvatar(userProfile.avatar);
+
+    const { data: items } = await supabase.from('items').select('*').eq('is_active', true).limit(5);
+    if (items) setHotItems(items);
+
+    const { data: reqs, error } = await supabase
+      .from('requests')
+      .select(`
+        id, 
+        status, 
+        request_date, 
+        request_items ( *, items (*) )
+      `)
+      .eq('user_id', userProfile.id)
+      .order('request_date', { ascending: false });
+      
+    if (error) {
+      console.error("Ralat memuat turun permohonan:", error.message);
+    } else if (reqs) {
+      setRequests(reqs);
+    }
+
+    setLoading(false);
+  };
+
+
+  const updateAvatar = async (avatarId: string) => {
+    // 1. Add this safety check!
+    if (!userProfile || !userProfile.id) {
+      Alert.alert('Ralat', 'Sila log masuk semula.');
+      return;
+    }
+
+    setCurrentAvatar(avatarId);
+    setShowAvatarModal(false);
+    
+    const { error } = await supabase
+      .from('users')
+      .update({ avatar: avatarId })
+      .eq('id', userProfile.id);
+      
+    if (error) {
+      console.error("Avatar error:", error);
+      Alert.alert('Ralat', 'Gagal menukar gambar profil.');
+    }
+  };
+
+
+  const cancelRequest = async (id: number) => {
+    Alert.alert('Batal Permohonan', 'Pasti mahu batalkan permohonan ini?', [
+      { text: 'Tidak', style: 'cancel' },
+      { text: 'Ya, Batal', style: 'destructive', onPress: async () => {
+          const { error } = await supabase.from('requests').update({ status: 'Cancelled' }).eq('id', id);
+          if (error) Alert.alert('Ralat', error.message); else fetchDashboardData();
+        }
+      }
+    ]);
+  };
+
+  const toggleExpand = (id: number) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setExpandedRequestId(expandedRequestId === id ? null : id);
+  };
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'Approved': return '#16a34a'; 
+      case 'Rejected': return '#ef4444'; 
+      case 'Cancelled': return '#6b7280'; 
+      case 'Received': return '#2563eb'; 
+      default: return '#f59e0b'; 
+    }
+  };
+
+  const getStatusText = (status: string) => {
+    switch (status) {
+      case 'Approved': return 'Diluluskan';
+      case 'Rejected': return 'Ditolak';
+      case 'Cancelled': return 'Dibatalkan';
+      case 'Received': return 'Diterima';
+      default: return 'Dalam Proses';
+    }
+  };
+
+  const activeAvatar = AVATARS.find(a => a.id === currentAvatar) || AVATARS[0];
+  const userDept = DEPARTMENTS.find(d => d.id === userProfile?.department_id);
+
+  const renderHotItem = (item: any) => (
+    <TouchableOpacity key={item.id} activeOpacity={0.7} style={styles.hotCard} onPress={() => openQuantityModal(item)}>
+      <View style={styles.hotIconBg}><Feather name="trending-up" size={18} color="#ef4444" /></View>
+      <Text style={styles.hotName} numberOfLines={2}>{item.name}</Text>
+      <Text style={styles.hotStock}>Baki: {item.current_stock} {item.unit}</Text>
+      <View style={styles.hotAddBtn}><Text style={styles.hotAddText}>Mohon</Text></View>
+    </TouchableOpacity>
+  );
+
+  const renderRequest = ({ item }: { item: any }) => {
+    const dateObj = new Date(item.request_date);
+    const formattedDate = dateObj.toLocaleDateString('ms-MY', { day: '2-digit', month: 'short', year: 'numeric' });
+    const formattedTime = dateObj.toLocaleTimeString('ms-MY', { hour: '2-digit', minute: '2-digit' });
+    const itemCount = item.request_items ? item.request_items.length : 0;
+    const isExpanded = expandedRequestId === item.id;
+
+    return (
+      // Changed from TouchableOpacity to View to prevent touch conflicts
+      <View style={styles.reqCard}>
+        
+        {/* Only the header and info body are clickable to expand the list */}
+        <TouchableOpacity activeOpacity={0.8} onPress={() => toggleExpand(item.id)}>
+          <View style={styles.reqHeader}>
+            <View style={styles.reqIdWrap}>
+              <Feather name="file-text" size={16} color="#5138a1" style={{ marginRight: 6 }} />
+              <Text style={styles.reqId}>ID: #{item.id}</Text>
+            </View>
+            <View style={[styles.badge, { backgroundColor: getStatusColor(item.status) + '15', borderColor: getStatusColor(item.status) + '30' }]}>
+              <Text style={[styles.badgeText, { color: getStatusColor(item.status) }]}>{getStatusText(item.status)}</Text>
+            </View>
+          </View>
+
+          <View style={styles.reqBody}>
+            <View style={styles.reqInfoRow}>
+              <Feather name="calendar" size={14} color="#6b7280" style={{ marginRight: 8 }} />
+              <Text style={styles.reqInfoText}>{formattedDate} â€¢ {formattedTime}</Text>
+            </View>
+            <View style={styles.reqInfoRow}>
+              <Feather name="package" size={14} color="#6b7280" style={{ marginRight: 8 }} />
+              <Text style={styles.reqInfoText}>{itemCount} jenis barangan dipohon</Text>
+            </View>
+            
+            <Feather 
+              name={isExpanded ? "chevron-up" : "chevron-down"} 
+              size={18} 
+              color="#9ca3af" 
+              style={styles.expandIcon} 
+            />
+          </View>
+        </TouchableOpacity>
+
+        {/* Dropdown Items Section */}
+        {isExpanded && (
+          <View style={styles.expandedContainer}>
+            <Text style={styles.expandedTitle}>Senarai Barangan:</Text>
+            {item.request_items?.map((reqItem: any, index: number) => {
+              const qty = reqItem.quantity || reqItem.qty_requested || 0;
+              const itemName = reqItem.items?.name || 'Item tidak dijumpai';
+              const itemUnit = reqItem.items?.unit || '';
+
+              return (
+                <View key={reqItem.id || index} style={styles.expandedItemRow}>
+                  <Text style={styles.expandedItemName}>â€¢ {itemName}</Text>
+                  <Text style={styles.expandedItemQty}>{qty} {itemUnit}</Text>
+                </View>
+              );
+            })}
+          </View>
+        )}
+
+        {/* Cancel Button is now completely separated from the expand trigger */}
+        {item.status === 'Pending' && (
+          <View style={styles.reqFooter}>
+            <TouchableOpacity style={styles.cancelBtn} onPress={() => cancelRequest(item.id)}>
+              <Feather name="x-circle" size={16} color="#ef4444" />
+              <Text style={styles.cancelBtnText}>Batal Permohonan</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+      </View>
+    );
+  };
+
+  return (
+    <View style={styles.container}>
+      <View style={styles.profileBanner}>
+        <TouchableOpacity style={[styles.avatar, { backgroundColor: activeAvatar.color }]} onPress={() => setShowAvatarModal(true)}>
+          <Feather name={activeAvatar.icon as any} size={28} color={activeAvatar.iconColor} />
+          <View style={styles.editBadge}><Feather name="edit-2" size={10} color="#fff" /></View>
+        </TouchableOpacity>
+        <View style={styles.profileInfo}>
+          <Text style={styles.greeting}>Selamat Datang,</Text>
+          <Text style={styles.name} numberOfLines={1}>{userProfile?.full_name || 'Kakitangan MDR'}</Text>
+          <Text style={styles.jawatan} numberOfLines={1}>
+            {userProfile?.jawatan || 'Tiada Jawatan'} {userDept ? `(${userDept.short})` : ''}
+          </Text>
+        </View>
+      </View>
+
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 100 }}>
+        
+        <View style={styles.section}>
+          {/* Wrapped Title to fix spacing alignment */}
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Barangan Sering Dipohon</Text>
+          </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.hotScroll}>
+            {hotItems.map(renderHotItem)}
+          </ScrollView>
+        </View>
+
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Status Permohonan</Text>
+            <TouchableOpacity onPress={fetchDashboardData} style={styles.refreshBtn}>
+              <Feather name="refresh-cw" size={16} color="#5138a1" />
+            </TouchableOpacity>
+          </View>
+
+          {loading ? (
+            <ActivityIndicator size="large" color="#5138a1" style={{ marginTop: 40 }} />
+          ) : !loading && requests.length === 0 ? (
+            <View style={styles.emptyState}>
+              <Feather name="inbox" size={48} color="#d1d5db" />
+              <Text style={styles.emptyText}>Tiada permohonan dibuat setakat ini.</Text>
+            </View>
+          ) : (
+            <FlatList data={requests} keyExtractor={(item) => item.id.toString()} renderItem={renderRequest} scrollEnabled={false} />
+          )}
+        </View>
+      </ScrollView>
+
+      {/* Avatar Modal */}
+      <Modal visible={showAvatarModal} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Pilih Gambar Profil</Text>
+            <View style={styles.avatarGrid}>
+              {AVATARS.map(av => (
+                <TouchableOpacity key={av.id} style={[styles.avatarOption, { backgroundColor: av.color }, currentAvatar === av.id && styles.avatarSelected]} onPress={() => updateAvatar(av.id)}>
+                  <Feather name={av.icon as any} size={32} color={av.iconColor} />
+                </TouchableOpacity>
+              ))}
+            </View>
+            <TouchableOpacity style={styles.closeBtn} onPress={() => setShowAvatarModal(false)}><Text style={styles.closeBtnText}>Tutup</Text></TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#f4effc' },
+  profileBanner: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', padding: 24, margin: 20, borderRadius: 24, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.05, shadowRadius: 10, elevation: 4 },
+  avatar: { width: 60, height: 60, borderRadius: 30, justifyContent: 'center', alignItems: 'center', marginRight: 16, position: 'relative' },
+  editBadge: { position: 'absolute', bottom: 0, right: 0, backgroundColor: '#5138a1', width: 20, height: 20, borderRadius: 10, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: '#fff' },
+  profileInfo: { flex: 1 },
+  greeting: { fontSize: 13, color: '#6b7280', fontWeight: '600' },
+  name: { fontSize: 18, fontWeight: '800', color: '#1f2937', marginTop: 2 },
+  jawatan: { fontSize: 13, color: '#5138a1', fontWeight: '700', marginTop: 2 },
+  section: { marginBottom: 24 },
+  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 24, marginBottom: 12 },
+  sectionTitle: { fontSize: 18, fontWeight: '800', color: '#1f2937' },
+  refreshBtn: { padding: 8, backgroundColor: '#e0e7ff', borderRadius: 8 },
+  hotScroll: { paddingHorizontal: 20, gap: 12 },
+  hotCard: { width: 140, backgroundColor: '#fff', padding: 16, borderRadius: 20, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.05, shadowRadius: 8, elevation: 3 },
+  hotIconBg: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#fef2f2', justifyContent: 'center', alignItems: 'center', marginBottom: 12 },
+  hotName: { fontSize: 14, fontWeight: '700', color: '#1f2937', height: 40 },
+  hotStock: { fontSize: 12, color: '#6b7280', marginTop: 8, marginBottom: 12 },
+  hotAddBtn: { backgroundColor: '#5138a1', paddingVertical: 8, borderRadius: 10, alignItems: 'center' },
+  hotAddText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+  
+  reqCard: { backgroundColor: '#fff', borderRadius: 16, marginHorizontal: 20, marginBottom: 16, borderWidth: 1, borderColor: '#e5e7eb', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.03, shadowRadius: 4, elevation: 2, overflow: 'hidden' },
+  reqHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: '#f3f4f6', backgroundColor: '#fafafa' },
+  reqIdWrap: { flexDirection: 'row', alignItems: 'center' },
+  reqId: { fontSize: 14, fontWeight: '800', color: '#1f2937' },
+  badge: { paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12, borderWidth: 1 },
+  badgeText: { fontSize: 11, fontWeight: '800', textTransform: 'uppercase' },
+  reqBody: { padding: 16, position: 'relative' },
+  reqInfoRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
+  reqInfoText: { fontSize: 13, color: '#4b5563', fontWeight: '500' },
+  expandIcon: { position: 'absolute', right: 16, top: '50%' },
+  
+  // Expanded List Styles
+  expandedContainer: { paddingHorizontal: 16, paddingBottom: 16, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#f3f4f6', backgroundColor: '#f9fafb' },
+  expandedTitle: { fontSize: 12, fontWeight: '700', color: '#6b7280', marginBottom: 10, textTransform: 'uppercase' },
+  expandedItemRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6, alignItems: 'center' },
+  expandedItemName: { fontSize: 14, color: '#374151', flex: 1, paddingRight: 10 },
+  expandedItemQty: { fontSize: 14, fontWeight: '700', color: '#5138a1' },
+
+  reqFooter: { paddingHorizontal: 16, paddingBottom: 16, paddingTop: 8 },
+  cancelBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#fef2f2', paddingVertical: 10, borderRadius: 10, borderWidth: 1, borderColor: '#fecaca' },
+  cancelBtnText: { color: '#ef4444', fontWeight: '700', marginLeft: 8, fontSize: 13 },
+  
+  emptyState: { alignItems: 'center', marginTop: 40 },
+  emptyText: { marginTop: 16, color: '#9ca3af', fontSize: 15, fontWeight: '600' },
+  
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 24 },
+  modalContent: { backgroundColor: '#fff', borderRadius: 24, padding: 24, alignItems: 'center' },
+  modalTitle: { fontSize: 18, fontWeight: '800', color: '#1f2937', marginBottom: 20 },
+  avatarGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 16, marginBottom: 24 },
+  avatarOption: { width: 64, height: 64, borderRadius: 32, justifyContent: 'center', alignItems: 'center' },
+  avatarSelected: { borderWidth: 3, borderColor: '#5138a1' },
+  closeBtn: { backgroundColor: '#f3f4f6', paddingVertical: 12, paddingHorizontal: 32, borderRadius: 12 },
+  closeBtnText: { color: '#4b5563', fontWeight: '700' }
+});
+
+==================== FILE: apps\mobile\screens\LoginScreen.tsx ====================
+
+import React, { useState } from 'react';
+import { StyleSheet, View, TextInput, TouchableOpacity, Text, Image, KeyboardAvoidingView, Platform, Modal, Alert } from 'react-native';
+import { Feather } from '@expo/vector-icons';
+import { supabase } from '../lib/supabase';
+
+export default function LoginScreen({ onNavigateToSignUp }: { onNavigateToSignUp: () => void }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
+  
+  const [errorMsg, setErrorMsg] = useState('');
+
+  // Forgot Password States
+  const [showResetModal, setShowResetModal] = useState(false);
+  const [resetEmail, setResetEmail] = useState('');
+  const [resetLoading, setResetLoading] = useState(false);
+
+  async function signInWithEmail() {
+    setErrorMsg(''); 
+    if (!email || !password) return setErrorMsg('Sila isi e-mel dan kata laluan.');
+
+    setLoading(true);
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    
+    if (error) {
+      setErrorMsg('E-mel atau Kata Laluan salah.');
+    }
+    setLoading(false);
+  }
+
+  async function handleResetPassword() {
+    if (!resetEmail) {
+      Alert.alert('Ralat', 'Sila masukkan e-mel anda.');
+      return;
+    }
+    setResetLoading(true);
+    const { error } = await supabase.auth.resetPasswordForEmail(resetEmail);
+    setResetLoading(false);
+
+    if (error) {
+      Alert.alert('Ralat', error.message);
+    } else {
+      Alert.alert('Berjaya', 'Pautan untuk menetapkan semula kata laluan telah dihantar ke e-mel anda.');
+      setShowResetModal(false);
+      setResetEmail('');
+    }
+  }
+
+  return (
+    <View style={styles.container}>
+      <Image source={require('../assets/bg-login-2.png')} style={styles.backgroundImage} resizeMode="cover" />
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.keyboardContainer}>
+        <View style={styles.glassCard}>
+          
+          <View style={styles.logoContainer}>
+            <View style={styles.iconCircle}><Feather name="shopping-cart" size={32} color="#5138a1" /></View>
+            <Text style={styles.title}>Sistem Stor MDR</Text>
+            <Text style={styles.subtitle}>Majlis Daerah Raub</Text>
+          </View>
+
+          {errorMsg !== '' && (
+            <View style={styles.errorBox}>
+              <Feather name="alert-circle" size={18} color="#ef4444" />
+              <Text style={styles.errorText}>{errorMsg}</Text>
+            </View>
+          )}
+
+          <View style={styles.inputContainer}>
+            <Feather name="user" size={20} color="#9ca3af" style={styles.inputIcon} />
+            <TextInput style={styles.input} placeholder="E-mel (Sistem)" placeholderTextColor="#9ca3af" value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" />
+          </View>
+
+          <View style={styles.inputContainer}>
+            <Feather name="lock" size={20} color="#9ca3af" style={styles.inputIcon} />
+            <TextInput style={styles.input} placeholder="Kata Laluan" placeholderTextColor="#9ca3af" value={password} onChangeText={setPassword} secureTextEntry={!showPassword} autoCapitalize="none" />
+            <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={styles.eyeIcon}>
+              <Feather name={showPassword ? "eye" : "eye-off"} size={20} color="#9ca3af" />
+            </TouchableOpacity>
+          </View>
+
+          {/* Forgot Password Link */}
+          <TouchableOpacity style={styles.forgotPasswordWrap} onPress={() => setShowResetModal(true)}>
+            <Text style={styles.forgotPasswordText}>Lupa Kata Laluan?</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.loginButton} onPress={signInWithEmail} disabled={loading}>
+            <Text style={styles.loginButtonText}>{loading ? 'Memuatkan...' : 'Log Masuk'}</Text>
+            <Feather name="arrow-right" size={20} color="#fff" style={{ marginLeft: 8 }} />
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.signupWrap} onPress={onNavigateToSignUp}>
+            <Text style={styles.signupText}>Belum ada akaun? <Text style={styles.signupBold}>Daftar Pengguna</Text></Text>
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
+
+      {/* Forgot Password Modal */}
+      <Modal visible={showResetModal} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Lupa Kata Laluan?</Text>
+              <TouchableOpacity onPress={() => setShowResetModal(false)}>
+                <Feather name="x" size={24} color="#6b7280" />
+              </TouchableOpacity>
+            </View>
+            
+            <Text style={styles.modalSubtitle}>
+              Masukkan e-mel yang didaftarkan. Kami akan menghantar pautan untuk menetapkan semula kata laluan anda.
+            </Text>
+
+            <View style={[styles.inputContainer, { marginBottom: 24 }]}>
+              <Feather name="mail" size={20} color="#9ca3af" style={styles.inputIcon} />
+              <TextInput style={styles.input} placeholder="E-mel anda" placeholderTextColor="#9ca3af" value={resetEmail} onChangeText={setResetEmail} autoCapitalize="none" keyboardType="email-address" />
+            </View>
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity style={[styles.modalButton, styles.cancelButton]} onPress={() => setShowResetModal(false)}>
+                <Text style={styles.cancelText}>Batal</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.modalButton, styles.submitButton]} onPress={handleResetPassword} disabled={resetLoading}>
+                <Text style={styles.submitText}>{resetLoading ? 'Menghantar...' : 'Hantar Pautan'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1 },
+  backgroundImage: { position: 'absolute', width: '100%', height: '100%' },
+  keyboardContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
+  glassCard: { width: '100%', maxWidth: 400, backgroundColor: 'rgba(255, 255, 255, 0.90)', borderRadius: 32, padding: 32, borderWidth: 1.5, borderColor: 'rgba(255, 255, 255, 0.6)', shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.1, shadowRadius: 20, elevation: 10 },
+  logoContainer: { alignItems: 'center', marginBottom: 24 },
+  iconCircle: { width: 64, height: 64, borderRadius: 32, backgroundColor: 'rgba(81, 56, 161, 0.1)', justifyContent: 'center', alignItems: 'center', marginBottom: 12 },
+  title: { fontSize: 24, fontWeight: '900', color: '#1f2937' },
+  subtitle: { fontSize: 14, color: '#6b7280', marginTop: 4 },
+  
+  errorBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fef2f2', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: '#fecaca', marginBottom: 20 },
+  errorText: { color: '#ef4444', fontWeight: '700', marginLeft: 8, fontSize: 14, flex: 1 },
+
+  inputContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 16, paddingHorizontal: 16, height: 56, marginBottom: 12 },
+  inputIcon: { marginRight: 12 },
+  input: { flex: 1, fontSize: 16, color: '#1f2937' },
+  eyeIcon: { padding: 8 },
+  
+  forgotPasswordWrap: { alignSelf: 'flex-end', marginBottom: 16, paddingVertical: 4 },
+  forgotPasswordText: { color: '#5138a1', fontSize: 13, fontWeight: '700' },
+
+  loginButton: { flexDirection: 'row', backgroundColor: '#5138a1', height: 56, borderRadius: 16, justifyContent: 'center', alignItems: 'center', marginTop: 4, shadowColor: '#5138a1', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 4 },
+  loginButtonText: { color: '#ffffff', fontSize: 16, fontWeight: '700' },
+  signupWrap: { marginTop: 24, alignItems: 'center' },
+  signupText: { color: '#4b5563', fontSize: 14 },
+  signupBold: { color: '#5138a1', fontWeight: '800' },
+
+  // Modal Styles
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 24 },
+  modalContent: { backgroundColor: '#ffffff', padding: 24, borderRadius: 24 },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  modalTitle: { fontSize: 20, fontWeight: '800', color: '#1f2937' },
+  modalSubtitle: { fontSize: 14, color: '#6b7280', marginBottom: 24, lineHeight: 20 },
+  modalActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 12 },
+  modalButton: { paddingVertical: 12, paddingHorizontal: 20, borderRadius: 12 },
+  cancelButton: { backgroundColor: '#f3f4f6' },
+  submitButton: { backgroundColor: '#5138a1' },
+  cancelText: { color: '#4b5563', fontWeight: '700' },
+  submitText: { color: '#ffffff', fontWeight: '700' },
+});
+
+==================== FILE: apps\mobile\screens\MainLayout.tsx ====================
+
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, TouchableOpacity, Modal, TextInput, StyleSheet, SafeAreaView, ScrollView, Animated, Dimensions, Platform, LayoutAnimation, UIManager, Alert } from 'react-native';
+import { Feather } from '@expo/vector-icons';
+import { supabase } from '../lib/supabase';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
+
+import HomeScreen from './HomeScreen';
+import CatalogScreen from './CatalogScreen';
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
+
+const { width, height } = Dimensions.get('window');
+
+const smoothLayoutAnim = {
+  duration: 250,
+  create: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
+  update: { type: LayoutAnimation.Types.easeInEaseOut },
+  delete: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
+};
+
+interface CartItem {
+  item: any;
+  quantity: number;
+}
+
+export default function MainLayout() {
+  const [currentScreen, setCurrentScreen] = useState<'Home' | 'Catalog' | 'Panduan'>('Home');
+  const [userProfile, setUserProfile] = useState<any>(null);
+  
+  // Global State
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [categories, setCategories] = useState<any[]>([]);
+  const [activeCategory, setActiveCategory] = useState<any | null>(null);
+
+  // Modals & UI State
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isCategoryExpanded, setIsCategoryExpanded] = useState(false);
+  const [isCartOpen, setIsCartOpen] = useState(false);
+  
+  const [selectedItem, setSelectedItem] = useState<any | null>(null);
+  const [quantity, setQuantity] = useState('1');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const slideAnim = useRef(new Animated.Value(-width)).current;
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    fetchGlobalData();
+  }, []);
+
+  const fetchGlobalData = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      const { data: profile } = await supabase.from('users').select('*').eq('id', user.id).single();
+      setUserProfile(profile);
+    }
+    const { data: catData } = await supabase.from('categories').select('id, name').order('sort_order', { ascending: true });
+    if (catData) setCategories(catData);
+  };
+
+  const toggleMenu = (open: boolean) => {
+    const useNative = Platform.OS !== 'web';
+    if (open) {
+      setIsMenuOpen(true);
+      Animated.parallel([
+        Animated.spring(slideAnim, { toValue: 0, friction: 9, tension: 60, useNativeDriver: useNative }),
+        Animated.timing(fadeAnim, { toValue: 1, duration: 250, useNativeDriver: useNative })
+      ]).start();
+    } else {
+      Animated.parallel([
+        Animated.timing(slideAnim, { toValue: -width, duration: 250, useNativeDriver: useNative }),
+        Animated.timing(fadeAnim, { toValue: 0, duration: 250, useNativeDriver: useNative })
+      ]).start(() => setIsMenuOpen(false));
+    }
+  };
+
+  const navigateTo = (screen: 'Home' | 'Catalog' | 'Panduan', category: any = null) => {
+    LayoutAnimation.configureNext(smoothLayoutAnim);
+    setActiveCategory(category);
+    setCurrentScreen(screen);
+    toggleMenu(false);
+  };
+
+  // --- CART LOGIC ---
+  const addToCart = () => {
+    const qty = parseInt(quantity);
+    if (isNaN(qty) || qty <= 0) return Alert.alert('Ralat', 'Kuantiti tidak sah.');
+
+    const existingIndex = cart.findIndex(c => c.item.id === selectedItem.id);
+    const currentCartQty = existingIndex >= 0 ? cart[existingIndex].quantity : 0;
+    const totalQty = currentCartQty + qty;
+
+    // Tambah amaran pop-up visual di sini
+    if (totalQty > selectedItem.current_stock) {
+      return Alert.alert(
+        'Stok Tidak Mencukupi', 
+        `Jumlah yang dipohon (${totalQty}) melebihi baki stok semasa iaitu ${selectedItem.current_stock}.`
+      );
+    }
+
+    LayoutAnimation.configureNext(smoothLayoutAnim);
+    if (existingIndex >= 0) {
+      const newCart = [...cart];
+      newCart[existingIndex].quantity = totalQty;
+      setCart(newCart);
+    } else {
+      setCart([...cart, { item: selectedItem, quantity: qty }]);
+    }
+    setSelectedItem(null);
+    setQuantity('1');
+  };
+
+  const updateCartQty = (itemId: number, delta: number) => {
+    const itemInCart = cart.find(c => c.item.id === itemId);
+    if (!itemInCart) return;
+
+    const newQty = itemInCart.quantity + delta;
+
+    // Tambah amaran jika pengguna tekan butang '+' melebihi stok
+    if (newQty > itemInCart.item.current_stock) {
+      return Alert.alert('Stok Maksimum', 'Anda tidak boleh memohon lebih daripada baki sedia ada.');
+    }
+
+    if (newQty <= 0) return;
+
+    LayoutAnimation.configureNext(smoothLayoutAnim);
+    setCart(cart.map(c => c.item.id === itemId ? { ...c, quantity: newQty } : c));
+  };
+
+  const removeFromCart = (itemId: number) => {
+    LayoutAnimation.configureNext(smoothLayoutAnim);
+    setCart(cart.filter(c => c.item.id !== itemId));
+  };
+
+  const generateAndShareKEWPS8 = async (cartItems: CartItem[], profile: any) => {
+    const htmlContent = `
+      <html>
+        <head>
+          <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no" />
+          <style>
+            body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; padding: 40px; color: #000; font-size: 11px; }
+            .header-right { text-align: right; font-weight: bold; font-size: 14px; margin-bottom: 5px; }
+            .bpsi-box { float: right; border: 1px solid #000; width: 120px; height: 30px; margin-bottom: 20px; }
+            .bpsi-text { float: right; font-weight: bold; margin-right: 10px; margin-top: 8px; }
+            .clear { clear: both; }
+            .title { text-align: center; font-weight: bold; font-size: 14px; margin-bottom: 20px; margin-top: 10px; }
+            table { width: 100%; border-collapse: collapse; margin-bottom: 30px; }
+            th, td { border: 1px solid #000; padding: 6px; text-align: center; }
+            th { background-color: #f3f4f6; font-size: 10px; font-weight: bold; }
+            .item-name { text-align: left; }
+            .footer-table { width: 100%; border: none; margin-top: 20px; }
+            .footer-table td { border: none; text-align: left; vertical-align: top; width: 33%; padding: 0 10px; }
+            .sign-line { border-bottom: 1px dotted #000; width: 100%; margin-top: 60px; margin-bottom: 5px; }
+          </style>
+        </head>
+        <body>
+          <div class="header-right">KEW.PS-8</div>
+          <div><div class="bpsi-box"></div><div class="bpsi-text">No. BPSI :</div></div>
+          <div class="clear"></div>
+          <div class="title">BORANG PERMOHONAN STOK<br/>(INDIVIDU KEPADA STOR)</div>
+          <table>
+            <tr>
+              <th colspan="4" style="font-size: 12px;">PERMOHONAN</th>
+              <th colspan="3" style="font-size: 12px; background-color: #e5e7eb;">PEGAWAI PELULUS</th>
+              <th colspan="2" style="font-size: 12px; background-color: #d1d5db;">PERAKUAN PENERIMAAN</th>
+            </tr>
+            <tr>
+              <th style="width: 5%;">NO. KOD</th><th style="width: 30%;">PERIHAL STOK</th><th style="width: 8%;">KUANTITI DIMOHON</th><th style="width: 12%;">CATATAN</th>
+              <th style="width: 8%; background-color: #e5e7eb;">BAKI SEDIA ADA</th><th style="width: 8%; background-color: #e5e7eb;">KUANTITI DILULUSKAN</th><th style="width: 12%; background-color: #e5e7eb;">CATATAN</th>
+              <th style="width: 8%; background-color: #d1d5db;">KUANTITI DITERIMA</th><th style="width: 9%; background-color: #d1d5db;">CATATAN</th>
+            </tr>
+            ${cartItems.map((c, i) => `<tr><td>${i + 1}</td><td class="item-name">${c.item.name}</td><td>${c.quantity}</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>`).join('')}
+            ${Array.from({ length: Math.max(0, 5 - cartItems.length) }).map(() => `<tr><td style="color: transparent;">-</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>`).join('')}
+          </table>
+          <table class="footer-table">
+            <tr>
+              <td>
+                <b>Pemohon:</b><div class="sign-line"></div>
+                <b>Nama :</b> ${profile?.full_name?.toUpperCase() || '........................................'}<br/><br/>
+                <b>Jawatan :</b> ${profile?.jawatan?.toUpperCase() || '........................................'}<br/><br/>
+                <b>Tarikh :</b> ${new Date().toLocaleDateString('ms-MY')}
+              </td>
+              <td><b>Pegawai Pelulus:</b><div class="sign-line"></div><b>Nama :</b> ........................................<br/><br/><b>Jawatan :</b> ........................................<br/><br/><b>Tarikh :</b> ........................................</td>
+              <td><b>Pemohon (Penerima):</b><div class="sign-line"></div><b>Nama :</b> ${profile?.full_name?.toUpperCase() || '........................................'}<br/><br/><b>Jawatan :</b> ${profile?.jawatan?.toUpperCase() || '........................................'}<br/><br/><b>Tarikh :</b> ........................................</td>
+            </tr>
+          </table>
+        </body>
+      </html>
+    `;
+    try {
+      const { uri } = await Print.printToFileAsync({ html: htmlContent, base64: false });
+      await Sharing.shareAsync(uri, { UTI: '.pdf', mimeType: 'application/pdf', dialogTitle: 'Simpan / Cetak KEW.PS-8' });
+    } catch (error) {
+      Alert.alert('Ralat', 'Gagal menjana PDF.');
+    }
+  };
+
+  const submitCartRequest = async () => {
+    if (cart.length === 0) return;
+    setIsSubmitting(true);
+    try {
+      const { data: requestData, error: requestError } = await supabase.from('requests').insert([{ 
+        user_id: userProfile.id, department_id: userProfile?.department_id || null, status: 'Pending', remarks: `Permohonan pukal (${cart.length} item) dari mobile.` 
+      }]).select('id').single();
+      if (requestError) throw requestError;
+
+      const requestItems = cart.map(c => ({ request_id: requestData.id, item_id: c.item.id, qty_requested: c.quantity }));
+      const { error: itemsError } = await supabase.from('request_items').insert(requestItems);
+      if (itemsError) throw itemsError;
+      
+      const submittedCart = [...cart]; 
+      Alert.alert(
+        'Berjaya', 'Permohonan telah dihantar. Ingin jana PDF sebagai bukti permohonan?',
+        [
+          { text: 'Tutup', style: 'cancel' },
+          { text: 'Jana PDF', onPress: () => generateAndShareKEWPS8(submittedCart, userProfile) }
+        ]
+      );
+      LayoutAnimation.configureNext(smoothLayoutAnim);
+      setCart([]); setIsCartOpen(false);
+      
+      // Auto-navigate back to Home to see the new Pending request
+      navigateTo('Home');
+    } catch (error: any) {
+      Alert.alert('Gagal', error.message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const openQuantityModal = (item: any) => { setSelectedItem(item); setQuantity('1'); };
+
+  return (
+    <SafeAreaView style={styles.container}>
+      {/* GLOBAL HEADER */}
+      <View style={styles.headerContainer}>
+        <TouchableOpacity activeOpacity={0.6} style={styles.menuIcon} onPress={() => toggleMenu(true)}>
+          <Feather name="menu" size={28} color="#5138a1" />
+        </TouchableOpacity>
+        
+        <Text style={styles.headerTitle}>
+          {currentScreen === 'Home' ? 'Utama' : currentScreen === 'Panduan' ? 'Panduan' : activeCategory ? activeCategory.name : 'Semua Katalog'}
+        </Text>
+        
+        <TouchableOpacity activeOpacity={0.6} style={styles.menuIcon} onPress={() => setIsCartOpen(true)}>
+          <Feather name="shopping-cart" size={24} color="#5138a1" />
+          {cart.length > 0 && (
+            <View style={styles.cartBadge}>
+              <Text style={styles.cartBadgeText}>{cart.length}</Text>
+            </View>
+          )}
+        </TouchableOpacity>
+      </View>
+
+      {/* DYNAMIC SCREEN RENDERING */}
+      <View style={styles.screenWrapper}>
+        {currentScreen === 'Home' && <HomeScreen userProfile={userProfile} openQuantityModal={openQuantityModal} navigateTo={navigateTo} />}
+        {currentScreen === 'Catalog' && <CatalogScreen activeCategory={activeCategory} openQuantityModal={openQuantityModal} />}
+        {currentScreen === 'Panduan' && (
+          <View style={{flex:1, justifyContent:'center', alignItems:'center'}}>
+            <Feather name="book-open" size={48} color="#d1d5db" />
+            <Text style={{marginTop:16, color:'#6b7280'}}>Panduan Pengguna (Dalam Pembinaan)</Text>
+          </View>
+        )}
+      </View>
+
+      {/* UNIFIED GLOBAL MENU */}
+      <Modal visible={isMenuOpen} transparent animationType="none">
+        <View style={styles.drawerWrapper}>
+          <Animated.View style={[styles.drawerOverlay, { opacity: fadeAnim }]}>
+            <TouchableOpacity style={styles.drawerCloseArea} onPress={() => toggleMenu(false)} activeOpacity={1} />
+          </Animated.View>
+          <Animated.View style={[styles.drawerContent, { transform: [{ translateX: slideAnim }] }]}>
+            <View style={styles.drawerHeader}>
+              <Feather name="box" size={32} color="#fff" />
+              <Text style={styles.drawerTitle}>Sistem Stor</Text>
+              <Text style={styles.drawerSubtitle}>Majlis Daerah Raub</Text>
+            </View>
+            <ScrollView style={styles.drawerScroll}>
+              
+              <TouchableOpacity activeOpacity={0.7} style={[styles.drawerItem, currentScreen === 'Home' && styles.drawerItemActive]} onPress={() => navigateTo('Home')}>
+                <Feather name="home" size={20} color={currentScreen === 'Home' ? "#5138a1" : "#6b7280"} style={styles.drawerItemIcon} />
+                <Text style={[styles.drawerItemText, currentScreen === 'Home' && styles.drawerItemTextActive]}>Halaman Utama</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity activeOpacity={0.7} style={styles.drawerItem} onPress={() => { LayoutAnimation.configureNext(smoothLayoutAnim); setIsCategoryExpanded(!isCategoryExpanded); }}>
+                <Feather name="grid" size={20} color={currentScreen === 'Catalog' ? "#5138a1" : "#6b7280"} style={styles.drawerItemIcon} />
+                <Text style={[styles.drawerItemText, currentScreen === 'Catalog' && styles.drawerItemTextActive]}>Kategori Katalog</Text>
+                <Feather name={isCategoryExpanded ? "chevron-up" : "chevron-down"} size={20} color="#6b7280" />
+              </TouchableOpacity>
+
+              {isCategoryExpanded && (
+                <View style={styles.submenu}>
+                  <TouchableOpacity activeOpacity={0.7} style={styles.submenuItem} onPress={() => navigateTo('Catalog', null)}>
+                    <Text style={[styles.submenuText, currentScreen === 'Catalog' && activeCategory === null && styles.submenuTextActive]}>Semua Kategori</Text>
+                  </TouchableOpacity>
+                  {categories.map(cat => (
+                    <TouchableOpacity key={cat.id} activeOpacity={0.7} style={styles.submenuItem} onPress={() => navigateTo('Catalog', cat)}>
+                      <Text style={[styles.submenuText, activeCategory?.id === cat.id && styles.submenuTextActive]}>{cat.name}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+
+              <View style={styles.divider} />
+              
+              <TouchableOpacity activeOpacity={0.7} style={[styles.drawerItem, currentScreen === 'Panduan' && styles.drawerItemActive]} onPress={() => navigateTo('Panduan')}>
+                <Feather name="help-circle" size={20} color={currentScreen === 'Panduan' ? "#5138a1" : "#6b7280"} style={styles.drawerItemIcon} />
+                <Text style={[styles.drawerItemText, currentScreen === 'Panduan' && styles.drawerItemTextActive]}>Panduan Pengguna</Text>
+              </TouchableOpacity>
+
+            </ScrollView>
+            <TouchableOpacity activeOpacity={0.7} style={styles.logoutBtn} onPress={() => supabase.auth.signOut()}>
+              <Feather name="log-out" size={20} color="#ef4444" style={styles.drawerItemIcon} />
+              <Text style={styles.logoutText}>Log Keluar</Text>
+            </TouchableOpacity>
+          </Animated.View>
+        </View>
+      </Modal>
+
+      {/* QUANTITY MODAL */}
+      <Modal visible={selectedItem !== null} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Tambah ke Troli</Text>
+            <Text style={styles.modalSubtitle}>{selectedItem?.name}</Text>
+            <Text style={styles.modalText}>Baki Semasa: {selectedItem?.current_stock} {selectedItem?.unit}</Text>
+            <Text style={styles.label}>Kuantiti Dipohon:</Text>
+            <TextInput style={styles.modalInput} keyboardType="numeric" value={quantity} onChangeText={setQuantity} />
+            <View style={styles.modalActions}>
+              <TouchableOpacity activeOpacity={0.7} style={[styles.modalButton, styles.cancelButton]} onPress={() => setSelectedItem(null)}>
+                <Text style={styles.cancelText}>Batal</Text>
+              </TouchableOpacity>
+              <TouchableOpacity activeOpacity={0.7} style={[styles.modalButton, styles.submitButton]} onPress={addToCart}>
+                <Text style={styles.submitText}>Tambah</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* GLOBAL CART MODAL */}
+      <Modal visible={isCartOpen} transparent animationType="slide">
+        <View style={styles.cartOverlay}>
+          <View style={styles.cartContent}>
+            <View style={styles.cartHeader}>
+              <Text style={styles.cartTitle}>Troli Permohonan</Text>
+              <TouchableOpacity onPress={() => setIsCartOpen(false)}><Feather name="x" size={24} color="#6b7280" /></TouchableOpacity>
+            </View>
+            {cart.length === 0 ? (
+              <View style={styles.emptyCart}>
+                <Feather name="shopping-cart" size={48} color="#d1d5db" />
+                <Text style={styles.emptyCartText}>Troli anda kosong.</Text>
+              </View>
+            ) : (
+              <ScrollView style={styles.cartList}>
+                {cart.map((c, index) => (
+                  <View key={index} style={styles.cartItem}>
+                    <View style={styles.cartItemInfo}>
+                      <Text style={styles.cartItemName}>{c.item.name}</Text>
+                      <Text style={styles.cartItemQty}>Baki: {c.item.current_stock} {c.item.unit}</Text>
+                    </View>
+                    <View style={styles.cartCounterContainer}>
+                      <TouchableOpacity style={styles.counterBtn} onPress={() => updateCartQty(c.item.id, -1)}><Feather name="minus" size={16} color="#5138a1" /></TouchableOpacity>
+                      <Text style={styles.counterText}>{c.quantity}</Text>
+                      <TouchableOpacity style={styles.counterBtn} onPress={() => updateCartQty(c.item.id, 1)}><Feather name="plus" size={16} color="#5138a1" /></TouchableOpacity>
+                    </View>
+                    <TouchableOpacity onPress={() => removeFromCart(c.item.id)} style={styles.removeBtn}><Feather name="trash-2" size={20} color="#ef4444" /></TouchableOpacity>
+                  </View>
+                ))}
+              </ScrollView>
+            )}
+            <View style={styles.cartFooter}>
+              <TouchableOpacity style={[styles.checkoutBtn, cart.length === 0 && styles.checkoutBtnDisabled]} disabled={cart.length === 0 || isSubmitting} onPress={submitCartRequest}>
+                <Text style={styles.checkoutBtnText}>{isSubmitting ? 'Menghantar...' : 'Hantar Permohonan'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#f4effc' },
+  headerContainer: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingTop: 20, paddingBottom: 10, backgroundColor: '#fff', borderBottomWidth: 1, borderColor: '#f3f4f6' },
+  menuIcon: { padding: 4, position: 'relative' },
+  headerTitle: { fontSize: 18, fontWeight: '800', color: '#1f2937' },
+  cartBadge: { position: 'absolute', top: -4, right: -4, backgroundColor: '#ef4444', borderRadius: 10, width: 20, height: 20, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: '#fff' },
+  cartBadgeText: { color: '#fff', fontSize: 10, fontWeight: 'bold' },
+  screenWrapper: { flex: 1 },
+  
+  // Modals & Drawer (Same styles from CatalogScreen)
+  drawerWrapper: { flex: 1, flexDirection: 'row' },
+  drawerOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)' },
+  drawerCloseArea: { flex: 1 },
+  drawerContent: { position: 'absolute', top: 0, bottom: 0, left: 0, width: width * 0.75, maxWidth: 400, backgroundColor: '#ffffff', shadowColor: '#000', shadowOffset: { width: 5, height: 0 }, shadowOpacity: 0.2, shadowRadius: 10, elevation: 10, zIndex: 2 },
+  drawerHeader: { backgroundColor: '#5138a1', padding: 32, paddingTop: 60, borderBottomRightRadius: 30 },
+  drawerTitle: { color: '#ffffff', fontSize: 24, fontWeight: '800', marginTop: 12 },
+  drawerSubtitle: { color: '#d8b4fe', fontSize: 14, marginTop: 4 },
+  drawerScroll: { flex: 1, paddingTop: 20 },
+  drawerItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 16, paddingHorizontal: 24 },
+  drawerItemActive: { backgroundColor: '#f5f3ff', borderRightWidth: 3, borderColor: '#5138a1' },
+  drawerItemIcon: { marginRight: 16 },
+  drawerItemText: { flex: 1, fontSize: 16, fontWeight: '600', color: '#4b5563' },
+  drawerItemTextActive: { color: '#5138a1', fontWeight: '800' },
+  submenu: { backgroundColor: '#f9fafb', paddingVertical: 8, paddingHorizontal: 24 },
+  submenuItem: { paddingVertical: 12, paddingLeft: 36 },
+  submenuText: { fontSize: 15, color: '#6b7280', fontWeight: '500' },
+  submenuTextActive: { color: '#5138a1', fontWeight: '800' },
+  divider: { height: 1, backgroundColor: '#e5e7eb', marginVertical: 8, marginHorizontal: 24 },
+  logoutBtn: { flexDirection: 'row', alignItems: 'center', padding: 24, borderTopWidth: 1, borderColor: '#e5e7eb', backgroundColor: '#fef2f2' },
+  logoutText: { fontSize: 16, fontWeight: '700', color: '#ef4444' },
+  
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 24 },
+  modalContent: { backgroundColor: '#ffffff', padding: 24, borderRadius: 24 },
+  modalTitle: { fontSize: 20, fontWeight: '800', color: '#1f2937' },
+  modalSubtitle: { fontSize: 16, fontWeight: '600', color: '#6b7280', marginTop: 8, marginBottom: 4 },
+  modalText: { fontSize: 15, marginBottom: 16, color: '#5138a1', fontWeight: '700' },
+  label: { fontSize: 14, fontWeight: '700', marginTop: 8, marginBottom: 8, color: '#1f2937' },
+  modalInput: { borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 12, padding: 16, fontSize: 16, backgroundColor: '#f9fafb', color: '#1f2937' },
+  modalActions: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 24, gap: 12 },
+  modalButton: { paddingVertical: 12, paddingHorizontal: 24, borderRadius: 12 },
+  cancelButton: { backgroundColor: '#f3f4f6' },
+  submitButton: { backgroundColor: '#5138a1' },
+  cancelText: { color: '#4b5563', fontWeight: '700' },
+  submitText: { color: '#ffffff', fontWeight: '700' },
+  
+  cartOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  cartContent: { backgroundColor: '#ffffff', borderTopLeftRadius: 30, borderTopRightRadius: 30, height: height * 0.75, padding: 24 },
+  cartHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
+  cartTitle: { fontSize: 22, fontWeight: '800', color: '#1f2937' },
+  emptyCart: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  emptyCartText: { marginTop: 16, fontSize: 16, color: '#9ca3af', fontWeight: '600' },
+  cartList: { flex: 1 },
+  cartItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 16, borderBottomWidth: 1, borderColor: '#f3f4f6' },
+  cartItemInfo: { flex: 1, paddingRight: 12 },
+  cartItemName: { fontSize: 15, fontWeight: '700', color: '#1f2937', marginBottom: 4 },
+  cartItemQty: { fontSize: 13, color: '#6b7280', fontWeight: '600' },
+  cartCounterContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#f3f4f6', borderRadius: 10, marginRight: 12 },
+  counterBtn: { padding: 8 },
+  counterText: { fontSize: 16, fontWeight: '700', color: '#1f2937', marginHorizontal: 8, minWidth: 20, textAlign: 'center' },
+  removeBtn: { padding: 8, backgroundColor: '#fef2f2', borderRadius: 8 },
+  cartFooter: { paddingTop: 20, borderTopWidth: 1, borderColor: '#f3f4f6' },
+  checkoutBtn: { backgroundColor: '#5138a1', paddingVertical: 16, borderRadius: 16, alignItems: 'center' },
+  checkoutBtnDisabled: { backgroundColor: '#d1d5db' },
+  checkoutBtnText: { color: '#ffffff', fontSize: 18, fontWeight: '700' },
+});
+
+==================== FILE: apps\mobile\screens\SignUpScreen.tsx ====================
+
+import React, { useState } from 'react';
+import { StyleSheet, View, TextInput, TouchableOpacity, Text, Image, KeyboardAvoidingView, Platform, ScrollView, Modal, type ImageStyle, type StyleProp } from 'react-native';
+import { Feather } from '@expo/vector-icons';
+import { supabase } from '../lib/supabase';
+
+// Added TLK and MAINCOM here
+export const DEPARTMENTS = [
+  { id: 1, name: 'UNIT PERHUBUNGAN AWAM DAN PEMBANGUNAN MASYARAKAT', short: 'UPA' },
+  { id: 2, name: 'UNIT UNDANG-UNDANG', short: 'UU' },
+  { id: 3, name: 'UNIT PUSAT SETEMPAT', short: 'OSC' },
+  { id: 4, name: 'UNIT AUDIT DALAMAN', short: 'UAD' },
+  { id: 5, name: 'JABATAN KHIDMAT PENGURUSAN', short: 'JKP' },
+  { id: 6, name: 'BAHAGIAN TEKNOLOGI MAKLUMAT', short: 'BTM' },
+  { id: 7, name: 'BAHAGIAN PENGUATKUASAAN DAN KESELAMATAN', short: 'BP' },
+  { id: 8, name: 'JABATAN PERBENDAHARAAN', short: 'JP' },
+  { id: 9, name: 'JABATAN PENILAIAN DAN PENGURUSAN HARTA', short: 'JPPH' },
+  { id: 10, name: 'JABATAN PERANCANGAN BANDAR DAN LANDSKAP', short: 'JPBL' },
+  { id: 11, name: 'BAHAGIAN LANDSKAP', short: 'BL' },
+  { id: 12, name: 'JABATAN KEJURUTERAAN DAN KAWALAN BANGUNAN', short: 'JKB' },
+  { id: 13, name: 'JABATAN KESIHATAN AWAM DAN PERKHIDMATAN PERBANDARAN', short: 'JKAPP' },
+  { id: 14, name: 'CAWANGAN BUKIT FRASER', short: 'BF' },
+  { id: 15, name: 'TEMPAT LETAK KERETA', short: 'TLK' }
+];
+
+export default function SignUpScreen({ onBack }: { onBack: () => void }) {
+  const [name, setName] = useState('');
+  const [jawatan, setJawatan] = useState('');
+  const [deptId, setDeptId] = useState<number | null>(null);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  
+  const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [showDeptModal, setShowDeptModal] = useState(false);
+  
+  // New visual error state
+  const [errorMsg, setErrorMsg] = useState('');
+
+  async function handleSignUp() {
+    setErrorMsg(''); // Clear old errors
+    
+    if (!name || !jawatan || !deptId || !email || !password || !confirmPassword) {
+      return setErrorMsg('Sila isi semua maklumat.');
+    }
+    if (password !== confirmPassword) {
+      return setErrorMsg('Kata laluan tidak sepadan.');
+    }
+
+    setLoading(true);
+    
+    // 1. Create Auth Account
+    const { data: authData, error: authError } = await supabase.auth.signUp({ email, password });
+    
+    if (authError) {
+      setLoading(false);
+      return setErrorMsg(authError.message);
+    }
+
+    if (authData.user) {
+      // 2. Insert into public.users table (Auto-forced to 'User' role)
+      const { error: dbError } = await supabase.from('users').insert([{
+        id: authData.user.id,
+        full_name: name,
+        jawatan: jawatan,
+        department_id: deptId,
+        role: 'User', // <-- Forces every new account to be a normal user
+        avatar: 'default'
+      }]);
+
+      if (dbError) {
+        setErrorMsg('Ralat Pangkalan Data: ' + dbError.message);
+      } else {
+        alert('Pendaftaran Berjaya! Sila log masuk.');
+        onBack();
+      }
+    }
+    setLoading(false);
+  }
+
+  const selectedDept = DEPARTMENTS.find(d => d.id === deptId);
+
+  return (
+    <View style={styles.container}>
+      <Image source={require('../assets/bg-login-2.png')} style={styles.backgroundImage} resizeMode="cover" />
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.keyboardContainer}>
+        
+        <View style={styles.glassCard}>
+          <TouchableOpacity onPress={onBack} style={styles.backBtn}>
+            <Feather name="arrow-left" size={24} color="#1f2937" />
+          </TouchableOpacity>
+
+          <Text style={styles.title}>Daftar Pengguna Baru</Text>
+          
+          {errorMsg !== '' && (
+            <View style={styles.errorBox}>
+              <Feather name="alert-circle" size={18} color="#ef4444" />
+              <Text style={styles.errorText}>{errorMsg}</Text>
+            </View>
+          )}
+          
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
+            
+            <View style={styles.inputContainer}>
+              <Feather name="user" size={20} color="#9ca3af" style={styles.inputIcon} />
+              <TextInput style={styles.input} placeholder="Nama Penuh" placeholderTextColor="#9ca3af" value={name} onChangeText={setName} />
+            </View>
+
+            <View style={styles.inputContainer}>
+              <Feather name="briefcase" size={20} color="#9ca3af" style={styles.inputIcon} />
+              <TextInput style={styles.input} placeholder="Jawatan (Cth: Pegawai Tadbir N9)" placeholderTextColor="#9ca3af" value={jawatan} onChangeText={setJawatan} />
+            </View>
+
+            <TouchableOpacity style={styles.inputContainer} onPress={() => setShowDeptModal(true)}>
+              <Feather name="layers" size={20} color="#9ca3af" style={styles.inputIcon} />
+              <Text style={[styles.input, { color: selectedDept ? '#1f2937' : '#9ca3af' }]} numberOfLines={1}>
+                {selectedDept ? `${selectedDept.short} - ${selectedDept.name}` : 'Pilih Jabatan'}
+              </Text>
+              <Feather name="chevron-down" size={20} color="#9ca3af" />
+            </TouchableOpacity>
+
+            <View style={styles.inputContainer}>
+              <Feather name="mail" size={20} color="#9ca3af" style={styles.inputIcon} />
+              <TextInput style={styles.input} placeholder="E-mel" placeholderTextColor="#9ca3af" value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" />
+            </View>
+
+            <View style={styles.inputContainer}>
+              <Feather name="lock" size={20} color="#9ca3af" style={styles.inputIcon} />
+              <TextInput style={styles.input} placeholder="Kata Laluan" placeholderTextColor="#9ca3af" value={password} onChangeText={setPassword} secureTextEntry={!showPassword} autoCapitalize="none" />
+              <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={styles.eyeIcon}>
+                <Feather name={showPassword ? "eye" : "eye-off"} size={20} color="#9ca3af" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.inputContainer}>
+              <Feather name="check-circle" size={20} color="#9ca3af" style={styles.inputIcon} />
+              <TextInput style={styles.input} placeholder="Sahkan Kata Laluan" placeholderTextColor="#9ca3af" value={confirmPassword} onChangeText={setConfirmPassword} secureTextEntry={!showPassword} autoCapitalize="none" />
+            </View>
+
+            <TouchableOpacity style={styles.loginButton} onPress={handleSignUp} disabled={loading}>
+              <Text style={styles.loginButtonText}>{loading ? 'Mendaftar...' : 'Daftar Sekarang'}</Text>
+            </TouchableOpacity>
+          </ScrollView>
+        </View>
+      </KeyboardAvoidingView>
+
+      <Modal visible={showDeptModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Pilih Jabatan</Text>
+              <TouchableOpacity onPress={() => setShowDeptModal(false)}><Feather name="x" size={24} color="#1f2937" /></TouchableOpacity>
+            </View>
+            <ScrollView style={styles.deptScroll}>
+              {DEPARTMENTS.map(dept => (
+                <TouchableOpacity key={dept.id} style={styles.deptItem} onPress={() => { setDeptId(dept.id); setShowDeptModal(false); }}>
+                  <Text style={styles.deptShort}>{dept.short}</Text>
+                  <Text style={styles.deptName}>{dept.name}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1 },
+  backgroundImage: { position: 'absolute', width: '100%', height: '100%' },
+  keyboardContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 16, paddingTop: 60 },
+  glassCard: { width: '100%', maxWidth: 450, maxHeight: '90%', backgroundColor: 'rgba(255, 255, 255, 0.90)', borderRadius: 32, padding: 24, borderWidth: 1.5, borderColor: 'rgba(255, 255, 255, 0.6)', shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.1, shadowRadius: 20, elevation: 10 },
+  backBtn: { marginBottom: 16 },
+  title: { fontSize: 24, fontWeight: '900', color: '#1f2937', marginBottom: 16 },
+  
+  // New Error Styles
+  errorBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fef2f2', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: '#fecaca', marginBottom: 16 },
+  errorText: { color: '#ef4444', fontWeight: '700', marginLeft: 8, fontSize: 14, flex: 1 },
+
+  inputContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 16, paddingHorizontal: 16, height: 56, marginBottom: 12 },
+  inputIcon: { marginRight: 12 },
+  input: { flex: 1, fontSize: 15, color: '#1f2937'},
+  eyeIcon: { padding: 8 },
+  loginButton: { backgroundColor: '#5138a1', height: 56, borderRadius: 16, justifyContent: 'center', alignItems: 'center', marginTop: 16, shadowColor: '#5138a1', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 4 },
+  loginButtonText: { color: '#ffffff', fontSize: 16, fontWeight: '700' },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  modalContent: { backgroundColor: '#fff', borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '80%', padding: 24 },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
+  modalTitle: { fontSize: 18, fontWeight: '800', color: '#1f2937' },
+  deptScroll: { marginBottom: 20 },
+  deptItem: { paddingVertical: 16, borderBottomWidth: 1, borderColor: '#f3f4f6' },
+  deptShort: { fontSize: 16, fontWeight: '800', color: '#5138a1', marginBottom: 4 },
+  deptName: { fontSize: 13, color: '#4b5563' }
+});
+
+==================== FILE: apps\mobile\screens\UpdatePasswordScreen.tsx ====================
+
+import React, { useState } from 'react';
+import { StyleSheet, View, TextInput, TouchableOpacity, Text, Image, KeyboardAvoidingView, Platform, Alert } from 'react-native';
+import { Feather } from '@expo/vector-icons';
+import { supabase } from '../lib/supabase';
+
+export default function UpdatePasswordScreen({ onComplete }: { onComplete: () => void }) {
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
+
+  async function handleUpdatePassword() {
+    setErrorMsg('');
+    if (!password || !confirmPassword) return setErrorMsg('Sila isi kedua-dua ruangan.');
+    if (password !== confirmPassword) return setErrorMsg('Kata laluan tidak sepadan.');
+
+    setLoading(true);
+    
+    // Tell Supabase to update the password for the current recovery session
+    const { error } = await supabase.auth.updateUser({ password: password });
+    
+    if (error) {
+      setErrorMsg(error.message);
+    } else {
+      Alert.alert('Berjaya', 'Kata laluan anda telah berjaya ditukar. Sila log masuk semula.', [
+        { text: 'Log Masuk', onPress: async () => {
+            await supabase.auth.signOut(); // Force sign out to clear recovery session
+            onComplete();
+          } 
+        }
+      ]);
+    }
+    setLoading(false);
+  }
+
+  return (
+    <View style={styles.container}>
+      <Image source={require('../assets/bg-login-2.png')} style={styles.backgroundImage} resizeMode="cover" />
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.keyboardContainer}>
+        
+        <View style={styles.glassCard}>
+          <Text style={styles.title}>Cipta Kata Laluan Baru</Text>
+          <Text style={styles.subtitle}>Sila masukkan kata laluan baru untuk akaun anda.</Text>
+
+          {errorMsg !== '' && (
+            <View style={styles.errorBox}>
+              <Feather name="alert-circle" size={18} color="#ef4444" />
+              <Text style={styles.errorText}>{errorMsg}</Text>
+            </View>
+          )}
+
+          <View style={styles.inputContainer}>
+            <Feather name="lock" size={20} color="#9ca3af" style={styles.inputIcon} />
+            <TextInput style={styles.input} placeholder="Kata Laluan Baru" placeholderTextColor="#9ca3af" value={password} onChangeText={setPassword} secureTextEntry={!showPassword} autoCapitalize="none" />
+            <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={styles.eyeIcon}>
+              <Feather name={showPassword ? "eye" : "eye-off"} size={20} color="#9ca3af" />
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.inputContainer}>
+            <Feather name="check-circle" size={20} color="#9ca3af" style={styles.inputIcon} />
+            <TextInput style={styles.input} placeholder="Sahkan Kata Laluan Baru" placeholderTextColor="#9ca3af" value={confirmPassword} onChangeText={setConfirmPassword} secureTextEntry={!showPassword} autoCapitalize="none" />
+          </View>
+
+          <TouchableOpacity style={styles.loginButton} onPress={handleUpdatePassword} disabled={loading}>
+            <Text style={styles.loginButtonText}>{loading ? 'Menyimpan...' : 'Simpan Kata Laluan'}</Text>
+          </TouchableOpacity>
+        </View>
+
+      </KeyboardAvoidingView>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1 },
+  backgroundImage: { position: 'absolute', width: '100%', height: '100%' },
+  keyboardContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
+  glassCard: { width: '100%', maxWidth: 400, backgroundColor: 'rgba(255, 255, 255, 0.90)', borderRadius: 32, padding: 32, borderWidth: 1.5, borderColor: 'rgba(255, 255, 255, 0.6)', shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.1, shadowRadius: 20, elevation: 10 },
+  title: { fontSize: 22, fontWeight: '900', color: '#1f2937', marginBottom: 8, textAlign: 'center' },
+  subtitle: { fontSize: 14, color: '#6b7280', marginBottom: 24, textAlign: 'center', lineHeight: 20 },
+  errorBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fef2f2', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: '#fecaca', marginBottom: 20 },
+  errorText: { color: '#ef4444', fontWeight: '700', marginLeft: 8, fontSize: 14, flex: 1 },
+  inputContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 16, paddingHorizontal: 16, height: 56, marginBottom: 16 },
+  inputIcon: { marginRight: 12 },
+  input: { flex: 1, fontSize: 16, color: '#1f2937' },
+  eyeIcon: { padding: 8 },
+  loginButton: { flexDirection: 'row', backgroundColor: '#5138a1', height: 56, borderRadius: 16, justifyContent: 'center', alignItems: 'center', marginTop: 10, shadowColor: '#5138a1', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 4 },
+  loginButtonText: { color: '#ffffff', fontSize: 16, fontWeight: '700' },
+});
+
+==================== FILE: apps\web\next-env.d.ts ====================
+
+/// <reference types="next" />
+/// <reference types="next/image-types/global" />
+import "./.next/dev/types/routes.d.ts";
+import "./.next/dev/types/root-params.d.ts";
+
+// NOTE: This file should not be edited
+// see https://nextjs.org/docs/app/api-reference/config/typescript for more information.
+
+==================== FILE: apps\web\next.config.ts ====================
+
+import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  /* config options here */
+  experimental: {
+    agentFeedback: true,
+  },
+  cacheComponents: true,
+  partialPrefetching: true,
+  turbopack: {
+    rules: {
+      "*.css": {
+        loaders: ["@tailwindcss/turbopack"],
+        as: "*.css",
+      },
+    },
+  },
+};
+
+export default nextConfig;
+
+==================== FILE: apps\web\package.json ====================
+
+{
+  "name": "web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "@supabase/ssr": "^0.12.7",
+    "@supabase/supabase-js": "^2.119.0",
+    "next": "16.4.6",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/turbopack": "4.3.3",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.4.6",
+    "tailwindcss": "4.3.3",
+    "typescript": "^5"
+  }
+}
+
+==================== FILE: apps\web\tsconfig.json ====================
+
+{
+  "compilerOptions": {
+    "target": "ES2017",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "incremental": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "paths": {
+      "@/*": ["./*"]
+    }
+  },
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts",
+    "**/*.mts"
+  ],
+  "exclude": ["node_modules"]
+}
+
+==================== FILE: apps\web\app\actions.ts ====================
+
+'use server'
+
+import { redirect } from 'next/navigation';
+import { createClient } from '../lib/supabase/server'; // Adjust this import if your function is named differently
+
+export async function loginOfficer(formData: FormData) {
+  const email = formData.get('email') as string;
+  const password = formData.get('password') as string;
+  
+  // Initialize the Supabase server client
+  const supabase = await createClient();
+
+  const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  });
+
+  if (authError) {
+    return { error: 'E-mel atau kata laluan tidak sah.' };
+  }
+
+  // Verify the user is an Officer
+  if (authData.user) {
+    const { data: profile } = await supabase
+      .from('users')
+      .select('role') // We will create this column next
+      .eq('id', authData.user.id)
+      .single();
+
+    if (profile?.role === 'Officer' || profile?.role === 'admin') {
+      redirect('/dashboard');
+    } else {
+      // Kick them out if they are just normal mobile staff
+      await supabase.auth.signOut();
+      return { error: 'Akses ditolak. Portal ini hanya untuk Pegawai Pelulus MDR.' };
+    }
+  }
+  
+  return { error: 'Ralat pelayan.' };
+}
+
+==================== FILE: apps\web\app\globals.css ====================
+
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+==================== FILE: apps\web\app\layout.tsx ====================
+
+import type { Metadata } from "next";
+import { Geist, Geist_Mono } from "next/font/google";
+import "./globals.css";
+
+const geistSans = Geist({
+  variable: "--font-geist-sans",
+  subsets: ["latin"],
+});
+
+const geistMono = Geist_Mono({
+  variable: "--font-geist-mono",
+  subsets: ["latin"],
+});
+
+export const metadata: Metadata = {
+  title: "Create Next App",
+  description: "Generated by create next app",
+};
+
+export default function RootLayout({ children }: LayoutProps<"/">) {
+  return (
+    <html
+      lang="en"
+      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+    >
+      <body className="min-h-full flex flex-col">{children}</body>
+    </html>
+  );
+}
+
+==================== FILE: apps\web\app\page.tsx ====================
+
+'use client';
+
+import { useState } from 'react';
+import Image from 'next/image';
+import { loginOfficer } from './actions';
+
+export default function LoginPage() {
+  const [loading, setLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const handleSubmit = async (formData: FormData) => {
+    setLoading(true);
+    setErrorMessage(null);
+    
+    const response = await loginOfficer(formData);
+    
+    if (response?.error) {
+      setErrorMessage(response.error);
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen w-full relative flex items-center justify-center lg:justify-end p-6 lg:pr-32 overflow-hidden">
+      
+      {/* Full Screen Background Image */}
+      <div className="absolute inset-0 z-0">
+        <Image 
+          src="/bg-login.png" 
+          alt="Background" 
+          fill 
+          className="object-cover object-center"
+          priority
+        />
+        {/* Optional subtle overlay to ensure the glass stands out */}
+        <div className="absolute inset-0 bg-black/10 mix-blend-multiply" />
+      </div>
+
+      {/* Glassmorphism Login Card */}
+      <div className="relative z-10 w-full max-w-md bg-white/60 backdrop-blur-2xl border border-white/50 shadow-[0_8px_32px_0_rgba(31,38,135,0.15)] rounded-[2rem] p-8 sm:p-10">
+        
+        {/* Header & Logo */}
+        <div className="flex flex-col items-center mb-8">
+          <div className="relative w-24 h-24 mb-4 drop-shadow-md">
+            <Image 
+              src="/logo-mdr.png" 
+              alt="Logo Majlis Daerah Raub" 
+              fill 
+              className="object-contain" 
+              priority
+            />
+          </div>
+          <h1 className="text-2xl font-extrabold text-gray-900 tracking-tight text-center">Sistem Stor MDR</h1>
+          <p className="text-[#5138a1] text-sm mt-1 font-bold tracking-wide uppercase">Portal Pegawai</p>
+        </div>
+
+        {errorMessage && (
+          <div className="bg-red-50/90 backdrop-blur-sm border-l-4 border-red-500 text-red-700 p-4 rounded-xl mb-6 text-sm font-medium shadow-sm">
+            {errorMessage}
+          </div>
+        )}
+
+        <form action={handleSubmit} className="space-y-5">
+          {/* Username / Email Input */}
+          <div className="relative">
+            <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+              <FeatherUserIcon className="h-5 w-5 text-gray-500" />
+            </div>
+            <input
+              type="email"
+              name="email"
+              className="w-full pl-11 pr-4 py-3.5 border border-white/60 bg-white/50 backdrop-blur-md rounded-2xl text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#5138a1] focus:bg-white/80 transition-all font-medium shadow-inner"
+              placeholder="E-mel Rasmi"
+              required
+            />
+          </div>
+
+          {/* Password Input */}
+          <div className="relative">
+            <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+              <FeatherLockIcon className="h-5 w-5 text-gray-500" />
+            </div>
+            <input
+              type="password"
+              name="password"
+              className="w-full pl-11 pr-12 py-3.5 border border-white/60 bg-white/50 backdrop-blur-md rounded-2xl text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#5138a1] focus:bg-white/80 transition-all font-medium shadow-inner"
+              placeholder="Kata Laluan"
+              required
+            />
+            <div className="absolute inset-y-0 right-0 pr-4 flex items-center pointer-events-none">
+              <FeatherEyeOffIcon className="h-4 w-4 text-gray-400" />
+            </div>
+          </div>
+
+          {/* Login Button */}
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full bg-[#5138a1]/90 hover:bg-[#432b85] backdrop-blur-md text-white font-bold py-4 px-4 rounded-2xl transition-all shadow-lg hover:shadow-xl hover:-translate-y-0.5 flex justify-center items-center gap-3 disabled:opacity-70 disabled:hover:translate-y-0 mt-8 border border-white/20"
+          >
+            {loading ? (
+              <>
+                <svg className="animate-spin -ml-1 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                Menyemak...
+              </>
+            ) : (
+              <>
+                Log Masuk
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                </svg>
+              </>
+            )}
+          </button>
+        </form>
+        
+      </div>
+    </div>
+  );
+}
+
+const FeatherUserIcon = ({ className }: { className: string }) => (
+  <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+  </svg>
+);
+
+const FeatherLockIcon = ({ className }: { className: string }) => (
+  <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+  </svg>
+);
+
+const FeatherEyeOffIcon = ({ className }: { className: string }) => (
+  <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
+  </svg>
+);
+
+==================== FILE: apps\web\app\dashboard\page.tsx ====================
+
+'use client';
+
+import { useCallback, useEffect, useState } from 'react';
+import { createClient } from '../../lib/supabase/client';
+import ClockCard from './_components/ClockCard';
+import MiniCalendar from './_components/MiniCalendar';
+import ApprovalClient from './requests/[id]/ApprovalClient';
+
+// ---------------------------------------------------------------------------
+// Style tokens and icons
+// ---------------------------------------------------------------------------
+const glassPanel =
+  'rounded-[32px] border border-white/70 bg-white/40 backdrop-blur-xl shadow-[0_10px_40px_-10px_rgba(40,70,110,0.22)]';
+
+const base = { fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round' } as const;
+const IconDashboard = () => <svg className="h-5 w-5" {...base}><path d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" /></svg>;
+const IconPermohonan = () => <svg className="h-5 w-5" {...base}><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>;
+const IconSetting = () => <svg className="h-5 w-5" {...base}><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><circle cx="12" cy="12" r="3" /></svg>;
+const IconLogout = () => <svg className="h-5 w-5" {...base}><path d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>;
+const IconChevron = () => (
+  <svg className="mr-3 h-5 w-5 text-slate-400 transition-transform duration-300 group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+  </svg>
+);
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+const KL_OFFSET = 8 * 60 * 60 * 1000;
+const one = (v: any) => (Array.isArray(v) ? v[0] : v);
+const fmtDate = (iso?: string | null) =>
+  iso
+    ? new Intl.DateTimeFormat('ms-MY', { timeZone: 'Asia/Kuala_Lumpur', day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(iso))
+    : '-';
+
+const STATUS_LABEL: Record<string, string> = {
+  Pending: 'Menunggu', Approved: 'Diluluskan', Rejected: 'Ditolak', Received: 'Telah Diterima', Cancelled: 'Dibatalkan',
+};
+
+// ---------------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------------
+export default function SinglePageDashboard() {
+  const [activeMenu, setActiveMenu] = useState<'DASHBOARD' | 'PERMOHONAN' | 'SETTING'>('DASHBOARD');
+  const [requests, setRequests] = useState<any[]>([]);
+  const [lowStock, setLowStock] = useState<any[]>([]);
+  const [lowStockCount, setLowStockCount] = useState(0);
+  const [officerName, setOfficerName] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+
+  const [selectedReq, setSelectedReq] = useState<any | null>(null);
+  const [reqItems, setReqItems] = useState<any[]>([]);
+  const [loadingItems, setLoadingItems] = useState(false);
+  const [itemsError, setItemsError] = useState('');
+
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    setLoadError('');
+    const supabase = createClient();
+
+    // 1. Must be a logged-in, active Officer or Admin
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) { window.location.href = '/'; return; }
+
+    const { data: me } = await supabase
+      .from('users').select('full_name, role, is_active').eq('id', user.id).single();
+    if (!me || me.is_active === false || !['Officer', 'Admin'].includes(me.role ?? '')) {
+      await supabase.auth.signOut();
+      window.location.href = '/';
+      return;
+    }
+    setOfficerName(me.full_name ?? '');
+
+    // 2. Data
+    const [reqRes, stockRes] = await Promise.all([
+      supabase
+        .from('requests')
+        .select('id, status, remarks, request_date, approved_at, received_at, requester:users!requests_user_id_fkey(full_name, jawatan), departments(name, department_code)')
+        .order('request_date', { ascending: false })
+        .limit(300),
+      supabase
+        .from('v_items_catalog')
+        .select('id, name, item_code, unit, current_stock, minimum_stock, stock_status', { count: 'exact' })
+        .in('stock_status', ['Habis', 'Stok Rendah'])
+        .order('current_stock', { ascending: true })
+        .limit(6),
+    ]);
+
+    if (reqRes.error) {
+      console.error('requests:', reqRes.error);
+      setLoadError(`Gagal memuatkan permohonan: ${reqRes.error.message}`);
+    }
+    if (stockRes.error) console.error('stock:', stockRes.error);
+
+    setRequests(reqRes.data ?? []);
+    setLowStock(stockRes.data ?? []);
+    setLowStockCount(stockRes.count ?? 0);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { fetchData(); }, [fetchData]);
+
+  const handleLogout = async () => {
+    await createClient().auth.signOut();
+    window.location.href = '/';
+  };
+
+  const openRequestDetails = async (req: any) => {
+    setSelectedReq(req);
+    setReqItems([]);
+    setItemsError('');
+    setLoadingItems(true);
+
+    const { data, error } = await createClient()
+      .from('request_items')
+      .select('id, item_id, qty_requested, qty_approved, items(name, item_code, unit, current_stock)')
+      .eq('request_id', req.id)
+      .order('id');
+
+    if (error) {
+      console.error('request_items:', error);
+      setItemsError(`Gagal memuatkan senarai item: ${error.message}`);
+    }
+    setReqItems(data ?? []);
+    setLoadingItems(false);
+  };
+
+  const backToList = () => { setSelectedReq(null); fetchData(); };
+
+  const menuItems = [
+    { id: 'DASHBOARD', label: 'Dashboard Utama', icon: <IconDashboard /> },
+    { id: 'PERMOHONAN', label: 'Pengurusan Permohonan', icon: <IconPermohonan /> },
+    { id: 'SETTING', label: 'Tetapan Sistem', icon: <IconSetting /> },
+  ] as const;
+
+  const pending = requests.filter((r) => r.status === 'Pending');
+  const approved = requests.filter((r) => r.status === 'Approved');
+  const received = requests.filter((r) => r.status === 'Received');
+  const closedOther = requests.filter((r) => r.status === 'Rejected' || r.status === 'Cancelled');
+
+  const markedDates = Array.from(
+    new Set(pending.map((r) => new Date(new Date(r.request_date).getTime() + KL_OFFSET).toISOString().slice(0, 10)))
+  );
+
+  const deptCounts = requests.reduce((acc: Record<string, number>, r) => {
+    const name = one(r.departments)?.name || 'Lain-lain';
+    acc[name] = (acc[name] || 0) + 1;
+    return acc;
+  }, {});
+  const chartData = Object.entries(deptCounts).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const maxDept = chartData.length > 0 ? chartData[0][1] : 1;
+
+  // Request row used by the three accordions
+  const RequestRow = ({ req, label, primary }: { req: any; label: string; primary?: boolean }) => (
+    <div className="flex items-center justify-between rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+      <div>
+        <p className="font-semibold text-[#111936]">{one(req.requester)?.full_name || 'Tidak Diketahui'}</p>
+        <p className="mt-0.5 text-xs text-slate-500">
+          #{req.id} Â· {one(req.departments)?.department_code || one(req.departments)?.name || '-'} Â· {fmtDate(req.request_date)}
+        </p>
+      </div>
+      <button
+        onClick={() => openRequestDetails(req)}
+        className={
+          primary
+            ? 'rounded-xl bg-[#111936] px-5 py-2.5 text-sm font-bold text-white shadow-md transition-colors hover:bg-slate-800'
+            : 'rounded-xl border border-slate-300 bg-white px-5 py-2.5 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-50'
+        }
+      >
+        {label}
+      </button>
+    </div>
+  );
+
+  return (
+    <>
+      <style>{`
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      `}</style>
+
+      <div className="h-screen w-screen overflow-hidden bg-[radial-gradient(ellipse_at_top_left,#ffffff_0%,#e8eef3_35%,#b3c3d1_100%)] p-4 lg:p-6">
+        {/* Top bar */}
+        <div className="mb-4 flex items-center justify-between px-2">
+          <p className="text-lg text-slate-500">
+            Stor Pusat <span className="font-bold text-[#111936]">Sistem Tadbir MDR</span>
+          </p>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => fetchData()}
+              className="rounded-full border border-white/70 bg-white/50 px-4 py-2 text-sm text-slate-500 backdrop-blur transition hover:bg-white/80"
+            >
+              Muat semula
+            </button>
+            <div className="flex items-center gap-2 rounded-full border border-white/70 bg-white/50 px-4 py-2 text-sm text-slate-500 backdrop-blur">
+              <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" />
+              {officerName ? `Pegawai: ${officerName}` : 'Log masuk sebagai Pegawai'}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid h-[calc(100vh-85px)] grid-cols-[280px_1fr] gap-5 lg:grid-cols-[300px_1fr]">
+          {/* ==================== LEFT ==================== */}
+          <div className="no-scrollbar flex h-full flex-col gap-2 overflow-y-auto pb-2 pr-1">
+            <section className={`${glassPanel} flex shrink-0 flex-col gap-1 p-2`}>
+              {menuItems.map((item) => {
+                const isActive = activeMenu === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => { setActiveMenu(item.id); setSelectedReq(null); }}
+                    className={`flex items-center gap-3 rounded-2xl px-4 py-2.5 text-[14px] font-medium transition-all lg:text-[15px] ${
+                      isActive ? 'bg-[#111936] text-white shadow-lg shadow-[#111936]/20' : 'text-slate-600 hover:bg-white/60'
+                    }`}
+                  >
+                    <span className={isActive ? 'text-white' : 'text-slate-500'}>{item.icon}</span>
+                    {item.label}
+                  </button>
+                );
+              })}
+              <div className="my-1 border-t border-white/50" />
+              <button
+                onClick={handleLogout}
+                className="flex items-center gap-3 rounded-2xl px-4 py-2.5 text-[14px] font-medium text-rose-600 transition-all hover:bg-rose-50/50 lg:text-[15px]"
+              >
+                <IconLogout /> Log Keluar
+              </button>
+            </section>
+
+            <div className="shrink-0 origin-top scale-95 transform"><ClockCard /></div>
+            <div className="-mt-3 shrink-0 origin-top scale-95 transform"><MiniCalendar markedDates={markedDates} /></div>
+          </div>
+
+          {/* ==================== RIGHT ==================== */}
+          <section className={`${glassPanel} relative h-full overflow-y-auto p-6 lg:p-8`}>
+            {loading ? (
+              <div className="flex h-full animate-pulse items-center justify-center font-medium text-slate-500">
+                Menyegerakkan pangkalan data...
+              </div>
+            ) : (
+              <>
+                {loadError && (
+                  <div className="mb-4 rounded-2xl bg-rose-50 p-4 text-sm font-medium text-rose-700">{loadError}</div>
+                )}
+
+                {/* ----------------- DASHBOARD ----------------- */}
+                {activeMenu === 'DASHBOARD' && (
+                  <div>
+                    <h2 className="mb-6 text-2xl font-bold text-[#111936]">Analisis & Prestasi Stor</h2>
+
+                    <div className="mb-8 grid grid-cols-2 gap-4 lg:grid-cols-4">
+                      <div className="rounded-3xl border border-white/80 bg-white/60 p-5 shadow-sm">
+                        <p className="mb-1 text-sm font-semibold text-slate-500">Menunggu Semakan</p>
+                        <p className="text-3xl font-bold text-blue-600">{pending.length}</p>
+                      </div>
+                      <div className="rounded-3xl border border-white/80 bg-white/60 p-5 shadow-sm">
+                        <p className="mb-1 text-sm font-semibold text-slate-500">Diluluskan (Belum Disahkan)</p>
+                        <p className="text-3xl font-bold text-amber-500">{approved.length}</p>
+                      </div>
+                      <div className="rounded-3xl border border-white/80 bg-white/60 p-5 shadow-sm">
+                        <p className="mb-1 text-sm font-semibold text-slate-500">Selesai (Diterima)</p>
+                        <p className="text-3xl font-bold text-emerald-600">{received.length}</p>
+                      </div>
+                      <div className="rounded-3xl border border-rose-100 bg-rose-50/80 p-5 shadow-sm">
+                        <p className="mb-1 text-sm font-semibold text-rose-600">Amaran Stok</p>
+                        <p className="text-3xl font-bold text-rose-600">{lowStockCount}</p>
+                      </div>
+                    </div>
+
+                    <div className="mb-6 rounded-3xl border border-white/70 bg-white/50 p-6 shadow-sm">
+                      <h3 className="mb-6 text-lg font-semibold text-[#111936]">Permohonan Mengikut Jabatan</h3>
+                      <div className="space-y-5">
+                        {chartData.map(([dept, count]) => (
+                          <div key={dept}>
+                            <div className="mb-2 flex justify-between text-sm text-slate-600">
+                              <span className="font-medium">{dept}</span>
+                              <span className="font-bold text-[#111936]">{count} permohonan</span>
+                            </div>
+                            <div className="h-2.5 w-full rounded-full bg-slate-200">
+                              <div className="h-2.5 rounded-full bg-blue-600 transition-all duration-1000 ease-out" style={{ width: `${(count / maxDept) * 100}%` }} />
+                            </div>
+                          </div>
+                        ))}
+                        {chartData.length === 0 && <p className="text-sm text-slate-400">Tiada rekod jabatan.</p>}
+                      </div>
+                    </div>
+
+                    <div className="rounded-3xl border border-white/70 bg-white/50 p-6 shadow-sm">
+                      <h3 className="mb-4 text-lg font-semibold text-[#111936]">Item Perlu Perhatian</h3>
+                      {lowStock.length === 0 ? (
+                        <p className="text-sm text-slate-400">Semua baki stok mencukupi.</p>
+                      ) : (
+                        <ul className="divide-y divide-slate-100">
+                          {lowStock.map((i) => (
+                            <li key={i.id} className="flex items-center justify-between py-3">
+                              <div>
+                                <p className="text-sm font-semibold text-[#111936]">{i.name}</p>
+                                <p className="text-xs text-slate-400">{i.item_code} Â· minimum {i.minimum_stock}</p>
+                              </div>
+                              <span className={`rounded-lg px-3 py-1 text-sm font-bold ${i.current_stock === 0 ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'}`}>
+                                {i.current_stock === 0 ? 'Habis' : `${i.current_stock} ${i.unit}`}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* ----------------- PERMOHONAN ----------------- */}
+                {activeMenu === 'PERMOHONAN' && (
+                  <div>
+                    {selectedReq ? (
+                      <div>
+                        <button
+                          onClick={backToList}
+                          className="mb-6 flex items-center gap-2 text-sm font-semibold text-slate-500 transition-colors hover:text-[#111936]"
+                        >
+                          &larr; Kembali ke senarai permohonan
+                        </button>
+
+                        <div className="mb-6 flex flex-wrap items-center gap-8 rounded-3xl border border-white bg-white/70 p-6 shadow-sm">
+                          <div>
+                            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">Pemohon</p>
+                            <p className="text-lg font-bold text-[#111936]">{one(selectedReq.requester)?.full_name}</p>
+                            <p className="text-xs text-slate-500">{one(selectedReq.requester)?.jawatan}</p>
+                          </div>
+                          <div className="border-l border-slate-300 pl-8">
+                            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">Jabatan</p>
+                            <p className="text-sm font-medium text-slate-700">{one(selectedReq.departments)?.name}</p>
+                          </div>
+                          <div className="border-l border-slate-300 pl-8">
+                            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">Tarikh Mohon</p>
+                            <p className="text-sm font-medium text-slate-700">{fmtDate(selectedReq.request_date)}</p>
+                          </div>
+                          <div className="border-l border-slate-300 pl-8">
+                            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">Status</p>
+                            <span className="rounded-lg bg-slate-200 px-3 py-1 text-xs font-bold text-slate-600">
+                              {STATUS_LABEL[selectedReq.status] ?? selectedReq.status}
+                            </span>
+                          </div>
+                          {selectedReq.remarks && (
+                            <div className="w-full border-t border-slate-200 pt-3">
+                              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">Catatan Pemohon</p>
+                              <p className="text-sm text-slate-700">{selectedReq.remarks}</p>
+                            </div>
+                          )}
+                        </div>
+
+                        {itemsError && (
+                          <div className="mb-4 rounded-2xl bg-rose-50 p-4 text-sm font-medium text-rose-700">{itemsError}</div>
+                        )}
+
+                        {loadingItems ? (
+                          <p className="animate-pulse py-10 text-center text-slate-400">Menyediakan borang KEW.PS-8...</p>
+                        ) : (
+                          <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
+                            <ApprovalClient
+                              key={selectedReq.id}
+                              requestId={selectedReq.id}
+                              status={selectedReq.status}
+                              initialItems={reqItems}
+                              onDone={backToList}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <>
+                        <h2 className="mb-6 text-2xl font-bold text-[#111936]">Pengurusan Permohonan</h2>
+
+                        <details open className="group mb-4 rounded-3xl border border-white/70 bg-white/50 p-4 shadow-sm transition-all open:bg-white/80">
+                          <summary className="flex cursor-pointer list-none items-center font-bold text-[#111936] outline-none [&::-webkit-details-marker]:hidden">
+                            <IconChevron />
+                            <span className="mr-3 text-[17px]">Menunggu Semakan</span>
+                            <span className="rounded-lg bg-rose-100 px-2.5 py-0.5 text-sm font-bold text-rose-700">{pending.length}</span>
+                          </summary>
+                          <div className="mt-4 space-y-3 pl-2">
+                            {[...pending].reverse().map((req) => (
+                              <RequestRow key={req.id} req={req} label="Semak" primary />
+                            ))}
+                            {pending.length === 0 && <p className="ml-7 py-2 text-sm italic text-slate-500">Tiada permohonan baru menunggu kelulusan.</p>}
+                          </div>
+                        </details>
+
+                        <details className="group mb-4 rounded-3xl border border-white/70 bg-white/50 p-4 shadow-sm transition-all open:bg-white/80">
+                          <summary className="flex cursor-pointer list-none items-center font-bold text-[#111936] outline-none [&::-webkit-details-marker]:hidden">
+                            <IconChevron />
+                            <span className="mr-3 text-[17px]">Telah Diluluskan (Belum Disahkan Penerimaan)</span>
+                            <span className="rounded-lg bg-amber-100 px-2.5 py-0.5 text-sm font-bold text-amber-700">{approved.length}</span>
+                          </summary>
+                          <div className="mt-4 space-y-3 pl-2">
+                            {approved.map((req) => <RequestRow key={req.id} req={req} label="Lihat" />)}
+                            {approved.length === 0 && <p className="ml-7 py-2 text-sm italic text-slate-500">Tiada permohonan menunggu pengesahan penerimaan.</p>}
+                          </div>
+                        </details>
+
+                        <details className="group mb-4 rounded-3xl border border-white/70 bg-white/50 p-4 shadow-sm transition-all open:bg-white/80">
+                          <summary className="flex cursor-pointer list-none items-center font-bold text-[#111936] outline-none [&::-webkit-details-marker]:hidden">
+                            <IconChevron />
+                            <span className="mr-3 text-[17px]">Selesai (Telah Diterima)</span>
+                            <span className="rounded-lg bg-emerald-100 px-2.5 py-0.5 text-sm font-bold text-emerald-700">{received.length}</span>
+                          </summary>
+                          <div className="mt-4 space-y-3 pl-2">
+                            {received.map((req) => <RequestRow key={req.id} req={req} label="Lihat" />)}
+                            {received.length === 0 && <p className="ml-7 py-2 text-sm italic text-slate-500">Belum ada permohonan selesai.</p>}
+                          </div>
+                        </details>
+
+                        <details className="group mb-4 rounded-3xl border border-white/70 bg-white/50 p-4 shadow-sm transition-all open:bg-white/80">
+                          <summary className="flex cursor-pointer list-none items-center font-bold text-[#111936] outline-none [&::-webkit-details-marker]:hidden">
+                            <IconChevron />
+                            <span className="mr-3 text-[17px]">Ditolak / Dibatalkan</span>
+                            <span className="rounded-lg bg-slate-200 px-2.5 py-0.5 text-sm font-bold text-slate-600">{closedOther.length}</span>
+                          </summary>
+                          <div className="mt-4 space-y-3 pl-2">
+                            {closedOther.map((req) => <RequestRow key={req.id} req={req} label="Lihat" />)}
+                            {closedOther.length === 0 && <p className="ml-7 py-2 text-sm italic text-slate-500">Tiada rekod.</p>}
+                          </div>
+                        </details>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {/* ----------------- SETTING ----------------- */}
+                {activeMenu === 'SETTING' && (
+                  <div>
+                    <h2 className="mb-6 text-2xl font-bold text-[#111936]">Tetapan & Profil Pegawai</h2>
+                    <div className="flex h-[400px] flex-col items-center justify-center rounded-3xl border-2 border-dashed border-slate-300 bg-white/30 text-slate-400">
+                      <IconSetting />
+                      <p className="mt-4 font-medium">Modul seterusnya akan dibina di fasa akan datang.</p>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </section>
+        </div>
+      </div>
+    </>
+  );
+}
+
+==================== FILE: apps\web\app\dashboard\requests\page.tsx ====================
+
+import { connection } from 'next/server';
+import { createClient } from '../../../lib/supabase/server';
+import Link from 'next/link';
+
+export default async function AllRequestsPage() {
+  await connection(); // Elakkan prerender crash
+  const supabase = await createClient();
+
+  // Tarik semua rekod permohonan
+  const { data: requests, error } = await supabase
+    .from('requests')
+    .select(`
+      id, 
+      request_date, 
+      status, 
+      requester:users!requests_user_id_fkey(full_name), 
+      departments(name)
+    `)
+    .order('request_date', { ascending: false });
+
+  if (error) {
+    console.error('Ralat memuatkan senarai permohonan:', error.message);
+  }
+
+  const getStatusStyle = (status: string) => {
+    switch (status) {
+      case 'Pending':
+        return 'bg-blue-100 text-blue-700';
+      case 'Approved':
+        return 'bg-amber-100 text-amber-700';
+      case 'Received':
+        return 'bg-emerald-100 text-emerald-700';
+      case 'Rejected':
+        return 'bg-rose-100 text-rose-700';
+      default:
+        return 'bg-slate-100 text-slate-700';
+    }
+  };
+
+  const getStatusLabel = (status: string) => {
+    switch (status) {
+      case 'Pending': return 'Menunggu Semakan';
+      case 'Approved': return 'Belum Diambil (Lulus)';
+      case 'Received': return 'Selesai (Diterima)';
+      case 'Rejected': return 'Ditolak';
+      default: return status;
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-[radial-gradient(ellipse_at_top_left,#ffffff_0%,#e8eef3_35%,#b3c3d1_100%)] p-5 lg:p-10">
+      <div className="mx-auto max-w-6xl">
+        
+        {/* Header */}
+        <div className="mb-6 flex items-center justify-between">
+          <Link href="/dashboard" className="flex items-center gap-2 text-sm font-semibold text-slate-500 hover:text-[#111936] transition">
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
+            Kembali ke Dashboard Utama
+          </Link>
+          <h1 className="text-2xl font-semibold text-[#111936]">Senarai Penuh Permohonan</h1>
+        </div>
+
+        {/* Table Container */}
+        <div className="rounded-[32px] border border-white/70 bg-white/40 backdrop-blur-xl shadow-[0_10px_40px_-10px_rgba(40,70,110,0.22)] p-6 lg:p-8">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm text-slate-600">
+              <thead className="border-b border-white/60 text-xs font-semibold uppercase tracking-wider text-slate-400">
+                <tr>
+                  <th className="pb-4">No. Ref</th>
+                  <th className="pb-4">Tarikh Permohonan</th>
+                  <th className="pb-4">Pemohon</th>
+                  <th className="pb-4">Jabatan</th>
+                  <th className="pb-4 text-center">Status</th>
+                  <th className="pb-4 text-right">Tindakan</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/40">
+                {requests?.map((req: any) => {
+                  const requester = Array.isArray(req.requester) ? req.requester[0] : req.requester;
+                  const dept = Array.isArray(req.departments) ? req.departments[0] : req.departments;
+                  
+                  return (
+                    <tr key={req.id} className="transition-colors hover:bg-white/30">
+                      <td className="py-4 font-semibold text-[#111936]">KEW.PS-8 #{req.id}</td>
+                      <td className="py-4">
+                        {new Date(req.request_date).toLocaleDateString('ms-MY', {
+                          day: '2-digit', month: 'short', year: 'numeric',
+                          hour: '2-digit', minute: '2-digit'
+                        })}
+                      </td>
+                      <td className="py-4 font-medium">{requester?.full_name || '-'}</td>
+                      <td className="py-4">{dept?.name || '-'}</td>
+                      <td className="py-4 text-center">
+                        <span className={`rounded-full px-3 py-1 text-xs font-bold ${getStatusStyle(req.status)}`}>
+                          {getStatusLabel(req.status)}
+                        </span>
+                      </td>
+                      <td className="py-4 text-right">
+                        <Link 
+                          href={`/dashboard/requests/${req.id}`}
+                          className="rounded-xl bg-white border border-slate-200 px-4 py-2 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-slate-50"
+                        >
+                          Lihat
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })}
+
+                {(!requests || requests.length === 0) && (
+                  <tr>
+                    <td colSpan={6} className="py-8 text-center text-slate-500 font-medium">
+                      Tiada rekod permohonan ditemui.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+==================== FILE: apps\web\app\dashboard\requests\[id]\action.ts ====================
+
+'use server';
+
+import { revalidatePath } from 'next/cache';
+import { createClient } from '../../../../lib/supabase/server';
+
+type Line = { id: number; approved_qty: number };
+export type ProcessResult = { error: string } | { ok: true };
+
+export async function processRequest(
+  requestId: number,
+  decision: 'Approved' | 'Rejected',
+  lines: Line[] = [],
+  reason = ''
+): Promise<ProcessResult> {
+  if (!Number.isInteger(requestId) || requestId <= 0) return { error: 'ID permohonan tidak sah.' };
+
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { error: 'Sesi tamat. Sila log masuk semula.' };
+
+  if (decision === 'Approved') {
+    const valid = lines.every((l) => Number.isInteger(l.id) && Number.isInteger(l.approved_qty) && l.approved_qty >= 0);
+    if (!valid) return { error: 'Kuantiti tidak sah.' };
+
+    const { error } = await supabase.rpc('approve_request_lines', {
+      p_request_id: requestId,
+      p_lines: lines.map((l) => ({ id: l.id, qty: l.approved_qty })),
+    });
+    if (error) return { error: error.message };
+  } else {
+    if (!reason.trim()) return { error: 'Sila nyatakan sebab penolakan.' };
+
+    const { error } = await supabase.rpc('reject_request', {
+      p_request_id: requestId,
+      p_reason: reason.trim(),
+    });
+    if (error) return { error: error.message };
+  }
+
+  revalidatePath('/dashboard');
+  revalidatePath(`/dashboard/requests/${requestId}`);
+  return { ok: true }; // the caller decides where to go next
+}
+
+==================== FILE: apps\web\app\dashboard\requests\[id]\ApprovalClient.tsx ====================
+
+'use client';
+
+import { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { processRequest } from './action';
+
+const glass =
+  'rounded-[32px] border border-white/70 bg-white/40 backdrop-blur-xl shadow-[0_10px_40px_-10px_rgba(40,70,110,0.22)]';
+
+type ItemInfo = { name: string; item_code: string; current_stock: number; unit: string };
+type Row = {
+  id: number;
+  item_id: number;
+  qty_requested: number;
+  qty_approved: number;
+  items: ItemInfo | ItemInfo[] | null;
+};
+
+export default function ApprovalClient({
+  requestId,
+  status,
+  initialItems,
+  onDone,
+}: {
+  requestId: number;
+  status: string;
+  initialItems: any[];
+  onDone?: () => void;
+}) {
+  const router = useRouter();
+  const readOnly = status !== 'Pending';
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [rejectMode, setRejectMode] = useState(false);
+  const [rejectReason, setRejectReason] = useState('');
+
+  const [rows, setRows] = useState(() =>
+    (initialItems as Row[]).map((r) => {
+      const info = Array.isArray(r.items) ? r.items[0] : r.items;
+      const stock = info?.current_stock ?? 0;
+      const max = Math.min(r.qty_requested, stock);
+      return {
+        id: r.id,
+        item_id: r.item_id,
+        requested: r.qty_requested,
+        stock,
+        name: info?.name ?? 'Item tidak dijumpai',
+        code: info?.item_code ?? '',
+        unit: info?.unit ?? '',
+        max,
+        // Pending: start at the most that can be approved. Otherwise show what was approved.
+        approved: readOnly ? r.qty_approved ?? 0 : max,
+      };
+    })
+  );
+
+  const setQty = (id: number, qty: number) =>
+    setRows((rs) => rs.map((r) => (r.id === id && qty >= 0 && qty <= r.max ? { ...r, approved: qty } : r)));
+
+  const totalApproved = rows.reduce((s, r) => s + r.approved, 0);
+  const totalRequested = rows.reduce((s, r) => s + r.requested, 0);
+  const isPartial = rows.some((r) => r.approved < r.requested);
+  const allZero = totalApproved === 0;
+
+  // Called after a successful approve or reject
+  const finish = () => {
+    if (onDone) onDone();            // used by the single-page dashboard
+    else router.push('/dashboard');  // used by the standalone review page
+  };
+
+  const handleApprove = async () => {
+    setError('');
+    setLoading(true);
+    const res = await processRequest(
+      requestId,
+      'Approved',
+      rows.map((r) => ({ id: r.id, approved_qty: r.approved }))
+    );
+    if ('error' in res) {
+      setError(res.error);
+      setLoading(false);
+      return;
+    }
+    finish();
+  };
+
+  const handleReject = async () => {
+    if (!rejectReason.trim()) {
+      setError('Sila nyatakan sebab penolakan.');
+      return;
+    }
+    setError('');
+    setLoading(true);
+    const res = await processRequest(requestId, 'Rejected', [], rejectReason);
+    if ('error' in res) {
+      setError(res.error);
+      setLoading(false);
+      return;
+    }
+    finish();
+  };
+
+  return (
+    <>
+      {/* ---------------- LEFT: items ---------------- */}
+      <section className={`${glass} p-6 lg:p-8`}>
+        <div className="mb-6 flex items-baseline justify-between">
+          <h2 className="text-2xl font-medium text-[#111936]">Senarai Item</h2>
+          <p className="text-sm text-slate-500">
+            Diluluskan <span className="font-semibold text-[#111936]">{totalApproved}</span> / Dimohon {totalRequested} unit
+          </p>
+        </div>
+
+        {rows.length === 0 ? (
+          <div className="p-8 text-center font-medium text-slate-500">
+            Tiada item ditemui untuk permohonan ini. Semak kebenaran (RLS) jadual request_items dan nama lajur
+            (qty_requested, qty_approved).
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm text-slate-600">
+              <thead className="border-b border-white/60 text-xs font-semibold uppercase tracking-wider text-slate-400">
+                <tr>
+                  <th className="pb-3">Item</th>
+                  <th className="pb-3 text-center">Dimohon</th>
+                  <th className="pb-3 text-center">{readOnly ? 'Diluluskan' : 'Lulus'}</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/40">
+                {rows.map((r) => {
+                  const short = r.stock < r.requested;
+                  return (
+                    <tr key={r.id} className="transition-colors hover:bg-white/20">
+                      <td className="py-4 pr-3">
+                        <p className="font-semibold text-[#111936]">{r.name}</p>
+                        <p className="text-xs text-slate-400">
+                          {r.code} Â· Stok semasa {r.stock} {r.unit}
+                        </p>
+                        {!readOnly && short && (
+                          <p className="mt-0.5 text-xs font-bold text-rose-500">
+                            {r.stock === 0 ? 'Stok habis' : `Stok hanya ${r.stock}`}
+                          </p>
+                        )}
+                      </td>
+                      <td className="py-4 text-center">
+                        <span className="text-lg font-bold text-[#111936]">{r.requested}</span>
+                      </td>
+                      <td className="py-4 text-center">
+                        {readOnly ? (
+                          <span className="text-lg font-bold text-[#111936]">{r.approved}</span>
+                        ) : (
+                          <div className="flex items-center justify-center gap-3">
+                            <button
+                              type="button"
+                              aria-label="Kurang"
+                              disabled={loading || r.approved <= 0}
+                              onClick={() => setQty(r.id, r.approved - 1)}
+                              className="flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white font-bold text-slate-600 shadow-sm transition hover:bg-slate-50 disabled:opacity-30"
+                            >
+                              âˆ’
+                            </button>
+                            <span className="w-8 text-center text-lg font-bold text-[#111936]">{r.approved}</span>
+                            <button
+                              type="button"
+                              aria-label="Tambah"
+                              disabled={loading || r.approved >= r.max}
+                              onClick={() => setQty(r.id, r.approved + 1)}
+                              className="flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white font-bold text-slate-600 shadow-sm transition hover:bg-slate-50 disabled:opacity-30"
+                            >
+                              +
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {/* ---------------- RIGHT: actions ---------------- */}
+      <section className={`${glass} flex flex-col justify-between p-6`}>
+        {readOnly ? (
+          <div className="my-auto text-center text-sm text-slate-500">
+            <p className="font-semibold text-[#111936]">Permohonan ini telah diproses.</p>
+            <p className="mt-1">Tiada tindakan lanjut diperlukan di halaman ini.</p>
+          </div>
+        ) : rejectMode ? (
+          <div className="space-y-4">
+            <h3 className="text-lg font-medium text-rose-700">Tolak Permohonan</h3>
+            <textarea
+              className="w-full rounded-xl border border-rose-200 bg-rose-50/50 p-3 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-rose-500"
+              rows={4}
+              placeholder="Nyatakan sebab penolakan (akan dipaparkan kepada pemohon)..."
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+            />
+            {error && <p className="text-xs font-medium text-rose-600">{error}</p>}
+            <div className="flex gap-2">
+              <button
+                onClick={() => { setRejectMode(false); setError(''); }}
+                disabled={loading}
+                className="flex-1 rounded-xl bg-slate-200 py-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-300 disabled:opacity-50"
+              >
+                Batal
+              </button>
+              <button
+                onClick={handleReject}
+                disabled={loading}
+                className="flex-1 rounded-xl bg-rose-600 py-3 text-sm font-semibold text-white transition hover:bg-rose-700 disabled:opacity-50"
+              >
+                {loading ? 'Memproses...' : 'Sahkan Tolak'}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-auto space-y-3">
+            {error && (
+              <p className="rounded-xl bg-rose-50 p-3 text-xs font-medium text-rose-600">{error}</p>
+            )}
+
+            <button
+              onClick={() => { setRejectMode(true); setError(''); }}
+              disabled={loading}
+              className="w-full rounded-2xl border-2 border-rose-200 bg-rose-50 py-3.5 text-sm font-bold text-rose-600 shadow-sm transition hover:bg-rose-100 disabled:opacity-50"
+            >
+              Tolak Permohonan
+            </button>
+
+            <button
+              onClick={handleApprove}
+              disabled={loading || allZero}
+              className={`w-full rounded-2xl py-3.5 text-sm font-bold text-white shadow-lg transition hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:translate-y-0 ${
+                isPartial ? 'bg-amber-500 hover:bg-amber-600' : 'bg-emerald-600 hover:bg-emerald-700'
+              }`}
+            >
+              {loading ? 'Memproses...' : isPartial ? 'Lulus Sebahagian' : 'Luluskan Permohonan'}
+            </button>
+
+            {allZero && (
+              <p className="text-center text-xs font-medium text-slate-500">
+                Tiada kuantiti diluluskan. Gunakan â€œTolak Permohonanâ€.
+              </p>
+            )}
+            {isPartial && !allZero && (
+              <p className="text-center text-xs font-medium text-amber-600">
+                Kuantiti diluluskan kurang daripada yang dimohon.
+              </p>
+            )}
+          </div>
+        )}
+      </section>
+    </>
+  );
+}
+
+==================== FILE: apps\web\app\dashboard\requests\[id]\page.tsx ====================
+
+import { Suspense } from 'react';
+import { connection } from 'next/server';
+import Link from 'next/link';
+import { redirect } from 'next/navigation';
+import { createClient } from '../../../../lib/supabase/server';
+import ApprovalClient from './ApprovalClient';
+
+const glassPanel =
+  'rounded-[32px] border border-white/70 bg-white/40 backdrop-blur-xl shadow-[0_10px_40px_-10px_rgba(40,70,110,0.22)]';
+
+const STATUS_LABEL: Record<string, { text: string; cls: string }> = {
+  Pending: { text: 'Menunggu', cls: 'bg-amber-100/80 text-amber-700' },
+  Approved: { text: 'Diluluskan', cls: 'bg-sky-100/80 text-sky-700' },
+  Rejected: { text: 'Ditolak', cls: 'bg-rose-100/80 text-rose-700' },
+  Received: { text: 'Telah Diterima', cls: 'bg-emerald-100/80 text-emerald-700' },
+  Cancelled: { text: 'Dibatalkan', cls: 'bg-slate-200/80 text-slate-600' },
+};
+
+// ---------------------------------------------------------------------------
+// Page shell (static). Everything that reads data is inside <Suspense>.
+// ---------------------------------------------------------------------------
+export default function RequestReviewPage({ params }: { params: Promise<{ id: string }> }) {
+  return (
+    <div className="min-h-screen bg-[radial-gradient(ellipse_at_top_left,#ffffff_0%,#e8eef3_35%,#b3c3d1_100%)] p-5 lg:p-10">
+      <div className="mx-auto max-w-5xl">
+        <Suspense fallback={<ReviewSkeleton />}>
+          <ReviewContent params={params} />
+        </Suspense>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Live content
+// ---------------------------------------------------------------------------
+async function ReviewContent({ params }: { params: Promise<{ id: string }> }) {
+  await connection(); // dynamic: must come before params, dates and queries
+
+  const { id } = await params;
+  const requestId = Number(id);
+  if (!Number.isInteger(requestId) || requestId <= 0) redirect('/dashboard');
+
+  const supabase = await createClient();
+
+  const [reqRes, itemsRes] = await Promise.all([
+    supabase
+      .from('requests')
+      .select(
+        `id, status, remarks, reject_reason, request_date,
+         requester:users!requests_user_id_fkey (full_name, jawatan),
+         departments (name, department_code)`
+      )
+      .eq('id', requestId)
+      .single(),
+
+    supabase
+      .from('request_items')
+      .select('id, item_id, qty_requested, qty_approved, items (name, item_code, current_stock, unit)')
+      .eq('request_id', requestId)
+      .order('id'),
+  ]);
+
+  if (reqRes.error || !reqRes.data) {
+    console.error('Review page: request', reqRes.error?.message);
+    redirect('/dashboard');
+  }
+  if (itemsRes.error) console.error('Review page: items', itemsRes.error.message);
+
+  const request: any = reqRes.data;
+  const requester = Array.isArray(request.requester) ? request.requester[0] : request.requester;
+  const dept = Array.isArray(request.departments) ? request.departments[0] : request.departments;
+  const status = STATUS_LABEL[request.status] ?? { text: request.status, cls: 'bg-slate-200 text-slate-600' };
+
+  const requestedAt = request.request_date
+    ? new Intl.DateTimeFormat('ms-MY', {
+        timeZone: 'Asia/Kuala_Lumpur',
+        day: '2-digit', month: 'short', year: 'numeric',
+        hour: '2-digit', minute: '2-digit', hour12: false,
+      }).format(new Date(request.request_date))
+    : '-';
+
+  return (
+    <>
+      <div className="mb-6 flex items-center justify-between">
+        <Link href="/dashboard" className="flex items-center gap-2 text-sm font-semibold text-slate-500 transition hover:text-[#111936]">
+          <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+          </svg>
+          Kembali
+        </Link>
+        <div className="flex items-center gap-2">
+          <span className={`rounded-full px-3 py-1 text-xs font-semibold ${status.cls}`}>{status.text}</span>
+          <div className="rounded-full border border-white/70 bg-white/50 px-4 py-1.5 text-sm font-bold text-[#111936] backdrop-blur">
+            KEW.PS-8 #{request.id}
+          </div>
+        </div>
+      </div>
+
+      <section className={`${glassPanel} mb-6 grid gap-6 p-6 sm:grid-cols-2 lg:grid-cols-4`}>
+        <Info label="Pemohon" value={requester?.full_name} />
+        <Info label="Jawatan" value={requester?.jawatan} />
+        <Info label="Bahagian / Jabatan" value={dept?.name} />
+        <Info label="Tarikh Mohon" value={requestedAt} />
+        {request.remarks && (
+          <div className="sm:col-span-2 lg:col-span-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Catatan Pemohon</p>
+            <p className="mt-1 text-sm text-slate-700">{request.remarks}</p>
+          </div>
+        )}
+        {request.status === 'Rejected' && request.reject_reason && (
+          <div className="sm:col-span-2 lg:col-span-4 rounded-2xl bg-rose-50/70 p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-rose-400">Sebab Penolakan</p>
+            <p className="mt-1 text-sm text-rose-700">{request.reject_reason}</p>
+          </div>
+        )}
+      </section>
+
+      <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
+        <ApprovalClient
+          requestId={requestId}
+          status={request.status}
+          initialItems={itemsRes.data ?? []}
+        />
+      </div>
+    </>
+  );
+}
+
+function Info({ label, value }: { label: string; value?: string | null }) {
+  return (
+    <div>
+      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</p>
+      <p className="mt-1 text-sm font-semibold text-[#111936]">{value || '-'}</p>
+    </div>
+  );
+}
+
+function ReviewSkeleton() {
+  return (
+    <>
+      <div className="mb-6 h-8 w-40 animate-pulse rounded-full bg-white/50" />
+      <div className={`${glassPanel} mb-6 h-28 animate-pulse`} />
+      <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
+        <div className={`${glassPanel} h-80 animate-pulse`} />
+        <div className={`${glassPanel} h-80 animate-pulse`} />
+      </div>
+    </>
+  );
+}
+
+==================== FILE: apps\web\app\dashboard\requests\[id]\kewps8\page.tsx ====================
+
+import { cookies } from 'next/headers';
+import { createClient } from '../../../../../lib/supabase/server'; // 5 levels up for this deep route
+import { redirect } from 'next/navigation';
+import Link from 'next/link';
+
+export default async function KewPS8PrintPage({ params }: { params: Promise<{ id: string }> }) {
+  await cookies(); // Prevent Next.js build crash
+  const { id } = await params;
+  const supabase = await createClient();
+
+  const { data: request, error: reqError } = await supabase
+    .from('requests')
+    .select('*, requester:users!requests_user_id_fkey(full_name, jawatan), departments(name)')
+    .eq('id', Number(id))
+    .single();
+
+  if (reqError || !request) redirect('/dashboard');
+
+  const { data: requestItems } = await supabase
+    .from('request_items')
+    .select('id, quantity, approved_quantity, items(name, item_code, unit)')
+    .eq('request_id', Number(id));
+
+  const requester = Array.isArray(request.requester) ? request.requester[0] : request.requester;
+  const dept = Array.isArray(request.departments) ? request.departments[0] : request.departments;
+  
+  // Format Date
+  const dateObj = new Date(request.request_date);
+  const formattedDate = dateObj.toLocaleDateString('ms-MY', { day: '2-digit', month: '2-digit', year: 'numeric' });
+
+  return (
+    <div className="min-h-screen bg-gray-200 p-8 print:p-0 print:bg-white flex justify-center">
+      
+      {/* Floating Action Bar (Hidden when printing) */}
+      <div className="fixed top-6 right-6 flex gap-4 print:hidden">
+        <Link href={`/dashboard/requests/${id}`} className="px-6 py-2.5 bg-slate-800 text-white font-semibold rounded-xl shadow-lg hover:bg-slate-700 transition">
+          Kembali
+        </Link>
+        <button type="button"
+          className="px-6 py-2.5 bg-blue-600 text-white font-semibold rounded-xl shadow-lg hover:bg-blue-700 transition"
+        >
+          Cetak PDF
+        </button>
+      </div>
+
+      {/* A4 Paper Container */}
+      <div className="bg-white w-[210mm] min-h-[297mm] shadow-2xl print:shadow-none p-12 text-black font-sans">
+        
+        {/* Document Header */}
+        <div className="flex justify-between items-start mb-10">
+          <div></div>
+          <div className="text-right">
+            <h1 className="font-bold text-xl uppercase">KEW.PS-8</h1>
+          </div>
+        </div>
+
+        {/* Title */}
+        <div className="text-center mb-10">
+          <h2 className="font-bold text-lg uppercase">Borang Permohonan Stok</h2>
+          <h3 className="font-bold text-md uppercase">(Individu / Jabatan)</h3>
+        </div>
+
+        {/* Table */}
+        <table className="w-full border-collapse border border-black mb-12 text-sm">
+          <thead>
+            <tr>
+              <th className="border border-black p-2 w-12 text-center">Bil.</th>
+              <th className="border border-black p-2 text-left">Perihal Stok</th>
+              <th className="border border-black p-2 text-center w-32">Kuantiti Dimohon</th>
+              <th className="border border-black p-2 text-center w-32">Kuantiti Diluluskan</th>
+              <th className="border border-black p-2 text-left w-48">Catatan</th>
+            </tr>
+          </thead>
+          <tbody>
+            {requestItems?.map((reqItem: any, index: number) => {
+              const item = Array.isArray(reqItem.items) ? reqItem.items[0] : reqItem.items;
+              return (
+                <tr key={reqItem.id}>
+                  <td className="border border-black p-2 text-center">{index + 1}</td>
+                  <td className="border border-black p-2">
+                    <span className="font-bold block">{item?.name}</span>
+                    <span className="text-xs text-gray-600">{item?.item_code}</span>
+                  </td>
+                  <td className="border border-black p-2 text-center">{reqItem.quantity} {item?.unit}</td>
+                  <td className="border border-black p-2 text-center">
+                    {reqItem.approved_quantity !== null ? `${reqItem.approved_quantity} ${item?.unit}` : '-'}
+                  </td>
+                  <td className="border border-black p-2"></td>
+                </tr>
+              );
+            })}
+            
+            {/* Fill empty rows to make it look like a standard form if items are few */}
+            {Array.from({ length: Math.max(0, 5 - (requestItems?.length || 0)) }).map((_, i) => (
+              <tr key={`empty-${i}`}>
+                <td className="border border-black p-2 h-10"></td>
+                <td className="border border-black p-2"></td>
+                <td className="border border-black p-2"></td>
+                <td className="border border-black p-2"></td>
+                <td className="border border-black p-2"></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        {/* Signatures */}
+        <div className="grid grid-cols-2 gap-12 text-sm mt-20">
+          
+          {/* Pemohon */}
+          <div>
+            <p className="mb-16 font-semibold">Tandatangan Pemohon :</p>
+            <div className="border-b border-black w-full mb-2"></div>
+            <p>Nama: <span className="font-semibold">{requester?.full_name}</span></p>
+            <p>Jawatan: {requester?.jawatan || '.............................................'}</p>
+            <p>Jabatan: {dept?.name}</p>
+            <p>Tarikh: {formattedDate}</p>
+          </div>
+
+          {/* Pelulus (Only shows data if approved) */}
+          <div>
+            <p className="mb-16 font-semibold">Tandatangan Pegawai Pelulus :</p>
+            <div className="border-b border-black w-full mb-2"></div>
+            {request.status === 'Approved' || request.status === 'Received' ? (
+              <>
+                <p>Nama: <span className="font-semibold uppercase">Pegawai Stor Pusat</span></p>
+                <p>Jawatan: Pegawai Tadbir</p>
+                <p>Tarikh: {new Date(request.approved_at).toLocaleDateString('ms-MY', { day: '2-digit', month: '2-digit', year: 'numeric' })}</p>
+              </>
+            ) : (
+              <>
+                <p>Nama: .............................................</p>
+                <p>Jawatan: ..........................................</p>
+                <p>Tarikh: .............................................</p>
+              </>
+            )}
+          </div>
+          
+        </div>
+      </div>
+      
+      {/* Hack to enable onClick print without making this a Client Component */}
+      <script dangerouslySetInnerHTML={{ __html: `
+        document.querySelector('button').addEventListener('click', function() {
+          window.print();
+        });
+      `}} />
+    </div>
+  );
+}
+
+==================== FILE: apps\web\app\dashboard\_components\ClockCard.tsx ====================
+
+'use client';
+
+import { useEffect, useState } from 'react';
+
+const TZ = 'Asia/Kuala_Lumpur';
+
+function getTimeParts(d: Date) {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: TZ, hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: false,
+  }).formatToParts(d);
+  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
+  return { h: get('hour') % 24, m: get('minute'), s: get('second') };
+}
+
+export default function ClockCard() {
+  // Start empty and fill after mount, so the server never reads the current time
+  const [now, setNow] = useState<Date | null>(null);
+
+  useEffect(() => {
+    setNow(new Date());
+    const id = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const shell =
+    'flex items-center gap-6 rounded-3xl border border-white/80 bg-white/70 p-5 shadow-[0_8px_24px_-8px_rgba(40,70,110,0.18)]';
+
+  if (!now) {
+    return (
+      <div className={`${shell} h-[190px]`}>
+        <div className="h-36 w-36 shrink-0 animate-pulse rounded-full bg-slate-200/60" />
+        <div className="space-y-2">
+          <div className="h-6 w-24 animate-pulse rounded bg-slate-200/60" />
+          <div className="h-4 w-32 animate-pulse rounded bg-slate-200/60" />
+        </div>
+      </div>
+    );
+  }
+
+  const { h, m, s } = getTimeParts(now);
+  const hourAngle = (h % 12) * 30 + m * 0.5;
+  const minuteAngle = m * 6 + s * 0.1;
+  const secondAngle = s * 6;
+
+  const timeText = new Intl.DateTimeFormat('en-US', {
+    timeZone: TZ, hour: 'numeric', minute: '2-digit', hour12: true,
+  }).format(now).toLowerCase();
+
+  const dateText = new Intl.DateTimeFormat('ms-MY', {
+    timeZone: TZ, weekday: 'short', day: 'numeric', month: 'long',
+  }).format(now);
+
+  return (
+    <div className={shell}>
+      <svg viewBox="0 0 200 200" className="h-36 w-36 shrink-0">
+        {/* ticks */}
+        {Array.from({ length: 60 }).map((_, i) => {
+          const major = i % 5 === 0;
+          return (
+            <line
+              key={i}
+              x1="100" y1={major ? 10 : 12} x2="100" y2={major ? 20 : 16}
+              stroke={major ? '#1c2540' : '#a9b6c6'}
+              strokeWidth={major ? 2 : 1}
+              strokeLinecap="round"
+              transform={`rotate(${i * 6} 100 100)`}
+            />
+          );
+        })}
+        {/* hour hand */}
+        <polygon
+          points="100,52 104.5,100 100,108 95.5,100"
+          fill="#111936"
+          transform={`rotate(${hourAngle} 100 100)`}
+        />
+        {/* minute hand */}
+        <polygon
+          points="100,30 103.5,100 100,106 96.5,100"
+          fill="#111936"
+          transform={`rotate(${minuteAngle} 100 100)`}
+        />
+        {/* second hand */}
+        <line
+          x1="100" y1="112" x2="100" y2="34"
+          stroke="#9fb0f5" strokeWidth="1.2" strokeLinecap="round"
+          transform={`rotate(${secondAngle} 100 100)`}
+        />
+        <circle cx="100" cy="100" r="5" fill="#111936" />
+        <circle cx="100" cy="100" r="1.8" fill="#fff" />
+      </svg>
+
+      <div>
+        <p className="text-3xl font-semibold tracking-tight text-[#111936]">{timeText}</p>
+        <p className="mt-1 text-sm text-slate-500">{dateText}</p>
+      </div>
+    </div>
+  );
+}
+
+==================== FILE: apps\web\app\dashboard\_components\MiniCalendar.tsx ====================
+
+'use client';
+
+import { useEffect, useState } from 'react';
+
+const TZ = 'Asia/Kuala_Lumpur';
+const MONTHS = ['Januari', 'Februari', 'Mac', 'April', 'Mei', 'Jun', 'Julai', 'Ogos', 'September', 'Oktober', 'November', 'Disember'];
+const DAYS = ['Isn', 'Sel', 'Rab', 'Kha', 'Jum', 'Sab', 'Ahd'];
+
+function kualaLumpurToday() {
+  const p = new Intl.DateTimeFormat('en-CA', {
+    timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date());
+  const get = (t: string) => Number(p.find((x) => x.type === t)?.value);
+  return { y: get('year'), m: get('month') - 1, d: get('day') };
+}
+
+const pad = (n: number) => String(n).padStart(2, '0');
+
+/** markedDates: array of 'YYYY-MM-DD' (e.g. days that have pending requests) */
+export default function MiniCalendar({ markedDates = [] }: { markedDates?: string[] }) {
+  const [today, setToday] = useState<{ y: number; m: number; d: number } | null>(null);
+  const [view, setView] = useState<{ y: number; m: number } | null>(null);
+
+  useEffect(() => {
+    const t = kualaLumpurToday();
+    setToday(t);
+    setView({ y: t.y, m: t.m });
+  }, []);
+
+  const shell =
+    'rounded-3xl border border-white/80 bg-white/70 p-5 shadow-[0_8px_24px_-8px_rgba(40,70,110,0.18)]';
+
+  if (!today || !view) return <div className={`${shell} h-[360px] animate-pulse`} />;
+
+  const first = new Date(view.y, view.m, 1);
+  const offset = (first.getDay() + 6) % 7; // Monday first
+  const daysInMonth = new Date(view.y, view.m + 1, 0).getDate();
+  const daysInPrev = new Date(view.y, view.m, 0).getDate();
+
+  const cells: { day: number; current: boolean; key: string }[] = [];
+  for (let i = offset - 1; i >= 0; i--) cells.push({ day: daysInPrev - i, current: false, key: `p${i}` });
+  for (let d = 1; d <= daysInMonth; d++) cells.push({ day: d, current: true, key: `c${d}` });
+  while (cells.length % 7 !== 0) cells.push({ day: cells.length % 7 + 1, current: false, key: `n${cells.length}` });
+
+  const move = (delta: number) => {
+    const d = new Date(view.y, view.m + delta, 1);
+    setView({ y: d.getFullYear(), m: d.getMonth() });
+  };
+
+  return (
+    <div className={shell}>
+      <div className="mb-3 flex items-center justify-between">
+        <p className="text-base font-medium text-slate-600">
+          {MONTHS[view.m]} {view.y}
+        </p>
+        <div className="flex items-center gap-1">
+          <button onClick={() => move(-1)} aria-label="Bulan sebelum"
+            className="rounded-lg p-1.5 text-slate-500 hover:bg-white/80">
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.8"><path strokeLinecap="round" strokeLinejoin="round" d="M15 6l-6 6 6 6" /></svg>
+          </button>
+          <button onClick={() => move(1)} aria-label="Bulan seterusnya"
+            className="rounded-lg p-1.5 text-slate-500 hover:bg-white/80">
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.8"><path strokeLinecap="round" strokeLinejoin="round" d="M9 6l6 6-6 6" /></svg>
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-7 gap-y-1 text-center">
+        {DAYS.map((d) => (
+          <span key={d} className="pb-2 text-xs font-medium text-slate-400">{d}</span>
+        ))}
+        {cells.map((c) => {
+          const iso = `${view.y}-${pad(view.m + 1)}-${pad(c.day)}`;
+          const isToday = c.current && view.y === today.y && view.m === today.m && c.day === today.d;
+          const marked = c.current && markedDates.includes(iso);
+          return (
+            <div key={c.key} className="flex justify-center">
+              <span
+                className={`relative flex h-9 w-9 items-center justify-center rounded-xl text-sm ${
+                  isToday
+                    ? 'bg-[#111936] font-semibold text-white shadow-md'
+                    : c.current
+                    ? 'text-slate-700 hover:bg-white/80'
+                    : 'text-slate-300'
+                }`}
+              >
+                {c.day}
+                {marked && (
+                  <span className={`absolute bottom-1 h-1 w-1 rounded-full ${isToday ? 'bg-white' : 'bg-amber-500'}`} />
+                )}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+
+      <button
+        onClick={() => setView({ y: today.y, m: today.m })}
+        className="mt-3 w-full rounded-xl py-1.5 text-xs font-medium text-slate-500 hover:bg-white/70"
+      >
+        Hari ini
+      </button>
+    </div>
+  );
+}
+
+==================== FILE: apps\web\lib\supabase\client.ts ====================
+
+import { createBrowserClient } from '@supabase/ssr'
+
+export function createClient() {
+  return createBrowserClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  )
+}
+
+==================== FILE: apps\web\lib\supabase\server.ts ====================
+
+import { createServerClient, type CookieOptions } from '@supabase/ssr'
+import { cookies } from 'next/headers'
+
+export async function createClient() {
+  const cookieStore = await cookies()
+
+  return createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return cookieStore.getAll()
+        },
+        setAll(cookiesToSet) {
+          try {
+            cookiesToSet.forEach(({ name, value, options }) =>
+              cookieStore.set(name, value, options)
+            )
+          } catch (error) {
+            // The `setAll` method was called from a Server Component.
+            // This can be ignored if you have middleware refreshing
+            // user sessions.
+          }
+        },
+      },
+    }
+  )
+}
