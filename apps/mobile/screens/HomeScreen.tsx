@@ -111,10 +111,10 @@ export default function HomeScreen({ userProfile, openQuantityModal }: any) {
         text: 'Ya, Batal',
         style: 'destructive',
         onPress: async () => {
-          const { error } = await supabase.from('requests').update({ status: 'Cancelled' }).eq('id', id);
-          if (error) Alert.alert('Ralat', error.message);
-          else fetchDashboardData();
-        },
+  const { error } = await supabase.rpc('cancel_request', { p_request_id: id });
+  if (error) Alert.alert('Ralat', error.message);
+  else fetchDashboardData();
+},
       },
     ]);
   };
@@ -155,7 +155,7 @@ export default function HomeScreen({ userProfile, openQuantityModal }: any) {
     );
   };
 
-  const hasDiscrepancy = verifyLines.some((l) => l.qtyReceived < l.qtyApproved);
+    const hasDiscrepancy = verifyLines.some((l) => l.qtyReceived < l.qtyApproved);
 
   const submitVerification = async () => {
     if (!verifyingReq) return;
@@ -166,27 +166,10 @@ export default function HomeScreen({ userProfile, openQuantityModal }: any) {
 
     setIsVerifying(true);
     try {
-      const deptObj = DEPARTMENTS.find((d) => d.id === userProfile?.department_id);
-      const staffName = userProfile?.full_name || 'Kakitangan';
-      const deptLabel = deptObj ? deptObj.short : 'MDR';
-
-      const notifTitle = hasDiscrepancy
-        ? `Perbezaan Penerimaan #${verifyingReq.id}`
-        : `Penerimaan Disahkan #${verifyingReq.id}`;
-      const notifMessage = hasDiscrepancy
-        ? `${staffName} (${deptLabel}) melaporkan perbezaan kuantiti bagi Permohonan #${verifyingReq.id}: "${discrepancyNote.trim()}"`
-        : `${staffName} (${deptLabel}) telah mengesahkan penerimaan lengkap bagi Permohonan #${verifyingReq.id}.`;
-
-      const { error } = await supabase.rpc('confirm_request_receipt', {
+      const { error } = await supabase.rpc('confirm_receipt', {
         p_request_id: verifyingReq.id,
-        p_lines: verifyLines.map((l) => ({
-          id: l.id,
-          qty_received: l.qtyReceived,
-        })),
-        p_has_discrepancy: hasDiscrepancy,
-        p_discrepancy_note: hasDiscrepancy ? discrepancyNote.trim() : null,
-        p_notif_title: notifTitle,
-        p_notif_message: notifMessage,
+        p_lines: verifyLines.map((l) => ({ id: l.id, qty_received: l.qtyReceived })),
+        p_note: hasDiscrepancy ? discrepancyNote.trim() : null,
       });
 
       if (error) throw error;

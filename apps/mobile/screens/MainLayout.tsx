@@ -200,18 +200,16 @@ export default function MainLayout() {
 
   const submitCartRequest = async () => {
     if (cart.length === 0) return;
+    if (!userProfile?.id) return Alert.alert('Ralat', 'Profil belum dimuatkan. Cuba sebentar lagi.');
     setIsSubmitting(true);
     try {
-      const { data: requestData, error: requestError } = await supabase.from('requests').insert([{ 
-        user_id: userProfile.id, department_id: userProfile?.department_id || null, status: 'Pending', remarks: `Permohonan pukal (${cart.length} item) dari mobile.` 
-      }]).select('id').single();
-      if (requestError) throw requestError;
+      const { error } = await supabase.rpc('submit_request', {
+        p_lines: cart.map((c) => ({ item_id: c.item.id, qty: c.quantity })),
+        p_remarks: `Permohonan pukal (${cart.length} item) dari mobile.`,
+      });
+      if (error) throw error;
 
-      const requestItems = cart.map(c => ({ request_id: requestData.id, item_id: c.item.id, qty_requested: c.quantity }));
-      const { error: itemsError } = await supabase.from('request_items').insert(requestItems);
-      if (itemsError) throw itemsError;
-      
-      const submittedCart = [...cart]; 
+      const submittedCart = [...cart];
       Alert.alert(
         'Berjaya', 'Permohonan telah dihantar. Ingin jana PDF sebagai bukti permohonan?',
         [
