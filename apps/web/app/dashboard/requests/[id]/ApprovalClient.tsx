@@ -1,8 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { processRequest } from './action';
+import { createClient } from '../../../../lib/supabase/client';
 
 const glass =
   'rounded-[32px] border border-white/70 bg-white/40 backdrop-blur-xl shadow-[0_10px_40px_-10px_rgba(40,70,110,0.22)]';
@@ -13,6 +14,9 @@ type Row = {
   item_id: number;
   qty_requested: number;
   qty_approved: number;
+  note_officer?: string | null;
+  qty_received?: number | null;
+  note_receipt?: string | null;
   items: ItemInfo | ItemInfo[] | null;
 };
 
@@ -34,6 +38,22 @@ export default function ApprovalClient({
   const [rejectMode, setRejectMode] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
 
+  // The officer signs the form by approving. Their saved digital signature (Tetapan > Profil)
+  // is stamped on the form together with the date and time of approval.
+  const [signature, setSignature] = useState<string | null | undefined>(undefined); // undefined = loading
+  const [signerName, setSignerName] = useState('');
+  useEffect(() => {
+    if (readOnly) return;
+    (async () => {
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return setSignature(null);
+      const { data } = await supabase.from('users').select('full_name, jawatan, signature_data').eq('id', user.id).single();
+      setSignature(data?.signature_data || null);
+      setSignerName([data?.full_name, data?.jawatan].filter(Boolean).join(' · '));
+    })();
+  }, [readOnly]);
+
   const [rows, setRows] = useState(() =>
     (initialItems as Row[]).map((r) => {
       const info = Array.isArray(r.items) ? r.items[0] : r.items;
@@ -50,12 +70,18 @@ export default function ApprovalClient({
         max,
         // Pending: start at the most that can be approved. Otherwise show what was approved.
         approved: readOnly ? r.qty_approved ?? 0 : max,
+        note: r.note_officer ?? '',
+        received: r.qty_received ?? 0,
+        noteReceipt: r.note_receipt ?? '',
       };
     })
   );
 
   const setQty = (id: number, qty: number) =>
     setRows((rs) => rs.map((r) => (r.id === id && qty >= 0 && qty <= r.max ? { ...r, approved: qty } : r)));
+
+  const setNote = (id: number, note: string) =>
+    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, note } : r)));
 
   const totalApproved = rows.reduce((s, r) => s + r.approved, 0);
   const totalRequested = rows.reduce((s, r) => s + r.requested, 0);
@@ -70,11 +96,21 @@ export default function ApprovalClient({
 
   const handleApprove = async () => {
     setError('');
+    // KEW.PS-8: a reduced quantity must be explained in the Catatan column
+    if (!signature) {
+      setError('Tandatangan digital belum ditetapkan. Sila tetapkan di Tetapan Sistem > Profil sebelum meluluskan.');
+      return;
+    }
+    const missing = rows.find((r) => r.approved < r.requested && !r.note.trim());
+    if (missing) {
+      setError(`Sila isi catatan bagi "${missing.name}" kerana kuantiti dikurangkan.`);
+      return;
+    }
     setLoading(true);
     const res = await processRequest(
       requestId,
       'Approved',
-      rows.map((r) => ({ id: r.id, approved_qty: r.approved }))
+      rows.map((r) => ({ id: r.id, approved_qty: r.approved, note: r.note }))
     );
     if ('error' in res) {
       setError(res.error);
@@ -124,6 +160,8 @@ export default function ApprovalClient({
                   <th className="pb-3">Item</th>
                   <th className="pb-3 text-center">Dimohon</th>
                   <th className="pb-3 text-center">{readOnly ? 'Diluluskan' : 'Lulus'}</th>
+                  {status === 'Received' && <th className="pb-3 text-center">Diterima</th>}
+                  <th className="pb-3 pl-3">Catatan</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/40">
@@ -172,6 +210,34 @@ export default function ApprovalClient({
                           </div>
                         )}
                       </td>
+                      {status === 'Received' && (
+                        <td className="py-4 text-center">
+                          <span className={`text-lg font-bold ${r.received < r.approved ? 'text-rose-600' : 'text-[#111936]'}`}>
+                            {r.received}
+                          </span>
+                        </td>
+                      )}
+                      <td className="py-4 pl-3">
+                        {readOnly ? (
+                          <span className="text-xs text-slate-500">
+                            {r.note || '-'}
+                            {status === 'Received' && r.noteReceipt && (
+                              <span className="mt-1 block font-semibold text-rose-600">Penerimaan: {r.noteReceipt}</span>
+                            )}
+                          </span>
+                        ) : (
+                          <input
+                            type="text"
+                            value={r.note}
+                            disabled={loading}
+                            onChange={(e) => setNote(r.id, e.target.value)}
+                            placeholder={r.approved < r.requested ? 'Wajib: sebab dikurangkan' : 'Pilihan'}
+                            className={`w-full min-w-[150px] rounded-lg border bg-white/70 px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-sky-400 ${
+                              r.approved < r.requested && !r.note.trim() ? 'border-amber-400' : 'border-slate-200'
+                            }`}
+                          />
+                        )}
+                      </td>
                     </tr>
                   );
                 })}
@@ -182,7 +248,15 @@ export default function ApprovalClient({
       </section>
 
       {/* ---------------- RIGHT: actions ---------------- */}
-      <section className={`${glass} flex flex-col justify-between p-6`}>
+      <section className={`${glass} flex flex-col justify-between gap-4 p-6`}>
+        <a
+          href={`/dashboard/requests/${requestId}/kewps8`}
+          target="_blank"
+          rel="noreferrer"
+          className="block w-full rounded-2xl border border-slate-200 bg-white/70 py-3 text-center text-sm font-semibold text-[#111936] shadow-sm transition hover:bg-white"
+        >
+          Lihat / Cetak Borang KEW.PS-8
+        </a>
         {readOnly ? (
           <div className="my-auto text-center text-sm text-slate-500">
             <p className="font-semibold text-[#111936]">Permohonan ini telah diproses.</p>
@@ -222,6 +296,28 @@ export default function ApprovalClient({
               <p className="rounded-xl bg-rose-50 p-3 text-xs font-medium text-rose-600">{error}</p>
             )}
 
+            <div className="rounded-2xl border border-slate-200 bg-white/70 p-3">
+              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">Tandatangan Pegawai Pelulus</p>
+              {signature === undefined ? (
+                <p className="text-xs text-slate-400">Memuatkan...</p>
+              ) : signature ? (
+                <>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={signature.startsWith('data:image') ? signature : `data:image/png;base64,${signature}`}
+                    alt="Tandatangan"
+                    className="h-12 object-contain"
+                  />
+                  <p className="mt-1 text-xs text-slate-500">{signerName}</p>
+                  <p className="text-[11px] text-slate-400">Akan dicop pada borang bersama tarikh dan masa kelulusan.</p>
+                </>
+              ) : (
+                <p className="text-xs font-semibold text-rose-600">
+                  Belum ada tandatangan digital. Tetapkan di Tetapan Sistem &gt; Profil sebelum meluluskan.
+                </p>
+              )}
+            </div>
+
             <button
               onClick={() => { setRejectMode(true); setError(''); }}
               disabled={loading}
@@ -232,7 +328,7 @@ export default function ApprovalClient({
 
             <button
               onClick={handleApprove}
-              disabled={loading || allZero}
+              disabled={loading || allZero || !signature}
               className={`w-full rounded-2xl py-3.5 text-sm font-bold text-white shadow-lg transition hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:translate-y-0 ${
                 isPartial ? 'bg-amber-500 hover:bg-amber-600' : 'bg-emerald-600 hover:bg-emerald-700'
               }`}

@@ -5,6 +5,8 @@ import { createClient } from '../../lib/supabase/client';
 import ClockCard from './_components/ClockCard';
 import MiniCalendar from './_components/MiniCalendar';
 import ApprovalClient from './requests/[id]/ApprovalClient';
+import DashboardCharts from './DashboardCharts';
+import ResolveDiscrepancy from './ResolveDiscrepancy';
 
 // ---------------------------------------------------------------------------
 // Style tokens and icons
@@ -435,7 +437,7 @@ export default function SinglePageDashboard() {
       supabase
         .from('requests')
         .select(
-          'id, status, remarks, has_discrepancy, discrepancy_note, request_date, approved_at, received_at, requester:users!requests_user_id_fkey(full_name, jawatan), departments(name, department_code)'
+          'id, status, remarks, has_discrepancy, discrepancy_note, discrepancy_resolved_at, discrepancy_resolution, request_date, approved_at, received_at, requester:users!requests_user_id_fkey(full_name, jawatan), departments(name, department_code)'
         )
         .order('request_date', { ascending: false })
         .limit(500),
@@ -523,7 +525,7 @@ export default function SinglePageDashboard() {
 
     const { data, error } = await createClient()
       .from('request_items')
-      .select('id, item_id, qty_requested, qty_approved, qty_received, items(name, item_code, unit, current_stock)')
+      .select('id, item_id, qty_requested, qty_approved, qty_received, note_officer, note_receipt, items(name, item_code, unit, current_stock)')
       .eq('request_id', req.id)
       .order('id');
 
@@ -588,6 +590,15 @@ export default function SinglePageDashboard() {
       return;
     }
 
+    const incomingName = handoverForm.new_full_name.trim();
+    const confirmed = window.confirm(
+      `Serah tugas daripada ${officerName} kepada ${incomingName}?\n\n` +
+        `• Permohonan yang DILULUSKAN selepas ini akan memaparkan ${incomingName} sebagai Pegawai Pelulus.\n` +
+        `• Borang yang telah diluluskan sebelum ini TIDAK berubah.\n` +
+        `• Akaun log masuk ini kekal sama. Sila tukar kata laluan kepada pegawai baharu.`
+    );
+    if (!confirmed) return;
+
     setSavingHandover(true);
     setHandoverMsg(null);
     const supabase = createClient();
@@ -639,7 +650,7 @@ export default function SinglePageDashboard() {
       await fetchActivityLogs();
       setHandoverMsg({
         type: 'ok',
-        text: `Serah tugas berjaya! Semua borang KEW.PS-8 seterusnya akan menggunakan profil & tandatangan ${incomingOfficer}.`,
+        text: `Serah tugas berjaya! Permohonan yang diluluskan mulai sekarang akan menggunakan nama, jawatan & tandatangan ${incomingOfficer}. Borang lama tidak berubah. Sila tukar kata laluan akaun ini kepada pegawai baharu.`,
       });
     }
     setSavingHandover(false);
@@ -671,7 +682,7 @@ export default function SinglePageDashboard() {
         const { data: freshReq } = await createClient()
           .from('requests')
           .select(
-            'id, status, remarks, has_discrepancy, discrepancy_note, request_date, approved_at, received_at, requester:users!requests_user_id_fkey(full_name, jawatan), departments(name, department_code)'
+            'id, status, remarks, has_discrepancy, discrepancy_note, discrepancy_resolved_at, discrepancy_resolution, request_date, approved_at, received_at, requester:users!requests_user_id_fkey(full_name, jawatan), departments(name, department_code)'
           )
           .eq('id', notif.request_id)
           .single();
@@ -705,7 +716,7 @@ export default function SinglePageDashboard() {
   const pending = requests.filter((r) => r.status === 'Pending');
   const approved = requests.filter((r) => r.status === 'Approved');
   const received = requests.filter((r) => r.status === 'Received');
-  const discrepancyReqs = requests.filter((r) => r.has_discrepancy);
+  const discrepancyReqs = requests.filter((r) => r.has_discrepancy && !r.discrepancy_resolved_at);
   const closedOther = requests.filter((r) => r.status === 'Rejected' || r.status === 'Cancelled');
   const notifCount = notifications.length;
 
@@ -1043,25 +1054,8 @@ export default function SinglePageDashboard() {
                       </div>
                     )}
 
-                    <div className="mb-6 rounded-3xl border border-white/70 bg-white/50 p-6 shadow-sm">
-                      <h3 className="mb-6 text-lg font-semibold text-[#111936]">Permohonan Mengikut Jabatan</h3>
-                      <div className="space-y-5">
-                        {chartData.map(([dept, count]) => (
-                          <div key={dept}>
-                            <div className="mb-2 flex justify-between text-sm text-slate-600">
-                              <span className="font-medium">{dept}</span>
-                              <span className="font-bold text-[#111936]">{count} permohonan</span>
-                            </div>
-                            <div className="h-2.5 w-full rounded-full bg-slate-200">
-                              <div
-                                className="h-2.5 rounded-full bg-blue-600 transition-all duration-1000 ease-out"
-                                style={{ width: `${(count / maxDept) * 100}%` }}
-                              />
-                            </div>
-                          </div>
-                        ))}
-                        {chartData.length === 0 && <p className="text-sm text-slate-400">Tiada rekod jabatan.</p>}
-                      </div>
+                    <div className="mb-6">
+                      <DashboardCharts refreshKey={requests.length} />
                     </div>
 
                     <div className="rounded-3xl border border-white/70 bg-white/50 p-6 shadow-sm">
@@ -1158,6 +1152,26 @@ export default function SinglePageDashboard() {
                               </p>
                               <p className="text-sm text-amber-900">{selectedReq.discrepancy_note}</p>
                             </div>
+                          )}
+                          {selectedReq.has_discrepancy && !selectedReq.discrepancy_resolved_at && (
+                            <ResolveDiscrepancy
+                              requestId={selectedReq.id}
+                              onDone={(action) => {
+                                setSelectedReq({
+                                  ...selectedReq,
+                                  discrepancy_resolved_at: new Date().toISOString(),
+                                  discrepancy_resolution: action,
+                                });
+                                fetchData();
+                              }}
+                            />
+                          )}
+                          {selectedReq.has_discrepancy && selectedReq.discrepancy_resolved_at && (
+                            <p className="w-full rounded-2xl bg-emerald-50 p-3 text-sm font-medium text-emerald-800">
+                              Perbezaan telah diselesaikan (
+                              {selectedReq.discrepancy_resolution === 'RETURN_TO_STOCK' ? 'dipulangkan ke stok' : 'hilang / rosak'}
+                              ).
+                            </p>
                           )}
                         </div>
 
@@ -1727,9 +1741,10 @@ export default function SinglePageDashboard() {
                             )}
                           </div>
                           <p className="mt-3 text-xs leading-relaxed text-amber-900">
-                            Proses Serah Tugas ini akan menggantikan maklumat profil dan tandatangan digital aktif supaya semua
-                            cetakan serta kelulusan borang <strong>KEW.PS-8</strong> seterusnya menggunakan identiti pegawai
-                            baharu, sambil merekodkan sejarah serah tugas dalam Log Aktiviti.
+                            Serah Tugas menukar nama, jawatan dan tandatangan pada akaun ini kepada pegawai baharu. Hanya
+                            permohonan yang <strong>diluluskan selepas serah tugas</strong> akan memaparkan pegawai baharu pada
+                            borang <strong>KEW.PS-8</strong>; borang yang telah diluluskan kekal dengan pegawai asal. Sejarah
+                            direkodkan dalam Log Aktiviti. Kata laluan akaun tidak berubah, jadi sila tukarkannya selepas ini.
                           </p>
                         </div>
 

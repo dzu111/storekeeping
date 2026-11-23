@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { createClient } from '../../../../lib/supabase/server';
 
-type Line = { id: number; approved_qty: number };
+type Line = { id: number; approved_qty: number; note?: string };
 export type ProcessResult = { error: string } | { ok: true };
 
 export async function processRequest(
@@ -24,7 +24,7 @@ export async function processRequest(
 
     const { error } = await supabase.rpc('approve_request_lines', {
       p_request_id: requestId,
-      p_lines: lines.map((l) => ({ id: l.id, qty: l.approved_qty })),
+      p_lines: lines.map((l) => ({ id: l.id, qty: l.approved_qty, note: (l.note ?? '').trim() })),
     });
     if (error) return { error: error.message };
   } else {

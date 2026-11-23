@@ -52,13 +52,30 @@ export default function HomeScreen({ userProfile, openQuantityModal }: any) {
     fetchDashboardData();
   }, [userProfile]);
 
-  const fetchDashboardData = async () => {
+  // Live updates: when an officer approves or rejects one of MY requests, refresh the list
+  // without the user pressing anything. RLS means only this user's own requests arrive.
+  useEffect(() => {
+    if (!userProfile?.id) return;
+    const channel = supabase
+      .channel(`my-requests-${userProfile.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'requests', filter: `user_id=eq.${userProfile.id}` },
+        () => fetchDashboardData(true)
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [userProfile?.id]);
+
+  const fetchDashboardData = async (silent = false) => {
     if (!userProfile || !userProfile.id) {
       setLoading(false);
       return;
     }
 
-    setLoading(true);
+    if (!silent) setLoading(true);
     if (userProfile.avatar) setCurrentAvatar(userProfile.avatar);
 
     const { data: items } = await supabase.from('items').select('*').eq('is_active', true).limit(5);
@@ -372,7 +389,7 @@ export default function HomeScreen({ userProfile, openQuantityModal }: any) {
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Status Permohonan</Text>
-            <TouchableOpacity onPress={fetchDashboardData} style={styles.refreshBtn}>
+            <TouchableOpacity onPress={() => fetchDashboardData()} style={styles.refreshBtn}>
               <Feather name="refresh-cw" size={16} color="#5138a1" />
             </TouchableOpacity>
           </View>

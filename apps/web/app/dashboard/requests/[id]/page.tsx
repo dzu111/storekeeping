@@ -56,7 +56,7 @@ async function ReviewContent({ params }: { params: Promise<{ id: string }> }) {
 
     supabase
       .from('request_items')
-      .select('id, item_id, qty_requested, qty_approved, items (name, item_code, current_stock, unit)')
+      .select('id, item_id, qty_requested, qty_approved, note_officer, items (name, item_code, current_stock, unit)')
       .eq('request_id', requestId)
       .order('id'),
   ]);
